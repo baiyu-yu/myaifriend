@@ -30,6 +30,15 @@ export const DEFAULT_CONFIG: AppConfig = {
     expression: {},
     motion: {},
   },
+  agentChain: {
+    enableAutoTaskRouting: true,
+    enableContextCompression: true,
+    compressionThresholdTokens: 3200,
+    compressionKeepRecentMessages: 12,
+    enableMemory: true,
+    memoryTopK: 6,
+    memoryMaxItems: 500,
+  },
   window: {
     chatWidth: 400,
     chatHeight: 600,

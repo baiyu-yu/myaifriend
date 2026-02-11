@@ -21,7 +21,7 @@
       <el-tab-pane label="角色设定" name="character">
         <el-button type="primary" @click="openCharDialogForCreate">新增角色</el-button>
         <el-row :gutter="12" style="margin-top: 12px">
-          <el-col :span="8" v-for="char in configStore.characters" :key="char.id">
+          <el-col v-for="char in configStore.characters" :key="char.id" :span="8">
             <el-card :class="{ active: char.id === configStore.config.activeCharacterId }">
               <template #header>
                 <div class="card-header">
@@ -60,6 +60,35 @@
         </el-table>
       </el-tab-pane>
 
+      <el-tab-pane label="工作链" name="chain">
+        <el-form label-width="220px" style="max-width: 760px">
+          <el-form-item label="启用自动任务路由">
+            <el-switch v-model="configStore.config.agentChain.enableAutoTaskRouting" />
+          </el-form-item>
+          <el-form-item label="启用上下文压缩">
+            <el-switch v-model="configStore.config.agentChain.enableContextCompression" />
+          </el-form-item>
+          <el-form-item label="压缩阈值（估算 token）">
+            <el-input-number v-model="configStore.config.agentChain.compressionThresholdTokens" :min="400" :max="20000" :step="200" />
+          </el-form-item>
+          <el-form-item label="保留最近消息数">
+            <el-input-number v-model="configStore.config.agentChain.compressionKeepRecentMessages" :min="4" :max="40" />
+          </el-form-item>
+          <el-form-item label="启用长期记忆">
+            <el-switch v-model="configStore.config.agentChain.enableMemory" />
+          </el-form-item>
+          <el-form-item label="每次注入记忆条数">
+            <el-input-number v-model="configStore.config.agentChain.memoryTopK" :min="1" :max="20" />
+          </el-form-item>
+          <el-form-item label="记忆库最大条数">
+            <el-input-number v-model="configStore.config.agentChain.memoryMaxItems" :min="50" :max="5000" :step="50" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="saveAgentChainConfig">保存工作链配置</el-button>
+          </el-form-item>
+        </el-form>
+      </el-tab-pane>
+
       <el-tab-pane label="Live2D" name="live2d">
         <el-form label-width="140px" style="max-width: 860px">
           <el-form-item label="模型文件">
@@ -90,12 +119,12 @@
           <el-table :data="expressionRows" border stripe>
             <el-table-column label="别名">
               <template #default="{ row }">
-                <el-input v-model="row.alias" placeholder="如: 开心" />
+                <el-input v-model="row.alias" placeholder="如：开心" />
               </template>
             </el-table-column>
             <el-table-column label="实际表情名称">
               <template #default="{ row }">
-                <el-input v-model="row.target" placeholder="如: exp_smile_01" />
+                <el-input v-model="row.target" placeholder="如：exp_smile_01" />
               </template>
             </el-table-column>
             <el-table-column label="操作" width="100">
@@ -114,12 +143,12 @@
           <el-table :data="motionRows" border stripe>
             <el-table-column label="别名">
               <template #default="{ row }">
-                <el-input v-model="row.alias" placeholder="如: 点头" />
+                <el-input v-model="row.alias" placeholder="如：点头" />
               </template>
             </el-table-column>
             <el-table-column label="实际动作组名">
               <template #default="{ row }">
-                <el-input v-model="row.target" placeholder="如: TapBody" />
+                <el-input v-model="row.target" placeholder="如：TapBody" />
               </template>
             </el-table-column>
             <el-table-column label="操作" width="100">
@@ -175,17 +204,17 @@
       <el-tab-pane label="唤起提示词" name="trigger">
         <el-form label-width="180px" style="max-width: 860px">
           <el-form-item label="快捷键唤起">
-            <el-input type="textarea" :rows="2" v-model="configStore.config.triggerPrompts.hotkey" />
+            <el-input v-model="configStore.config.triggerPrompts.hotkey" type="textarea" :rows="2" />
           </el-form-item>
           <el-form-item label="点击形象唤起">
-            <el-input type="textarea" :rows="2" v-model="configStore.config.triggerPrompts.click_avatar" />
+            <el-input v-model="configStore.config.triggerPrompts.click_avatar" type="textarea" :rows="2" />
           </el-form-item>
           <el-form-item label="随机定时唤起">
-            <el-input type="textarea" :rows="2" v-model="configStore.config.triggerPrompts.random_timer" />
+            <el-input v-model="configStore.config.triggerPrompts.random_timer" type="textarea" :rows="2" />
           </el-form-item>
-          <el-form-item label="文件变动唤起">
-            <el-input type="textarea" :rows="2" v-model="configStore.config.triggerPrompts.file_change" />
-            <el-text type="info">可用变量：&#123;&#123;fileChangeInfo&#125;&#125;</el-text>
+          <el-form-item label="文件变化唤起">
+            <el-input v-model="configStore.config.triggerPrompts.file_change" type="textarea" :rows="2" />
+            <el-text type="info">可用变量：{{ fileChangeInfo }}</el-text>
           </el-form-item>
           <el-form-item label="随机定时范围（分钟）">
             <el-input-number v-model="configStore.config.randomTimerRange.min" :min="1" :max="1440" />
@@ -229,7 +258,7 @@
           <el-input v-model="charForm.greeting" />
         </el-form-item>
         <el-form-item label="系统提示词" required>
-          <el-input type="textarea" :rows="8" v-model="charForm.systemPrompt" />
+          <el-input v-model="charForm.systemPrompt" type="textarea" :rows="8" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -251,6 +280,7 @@
             <el-checkbox value="file_operation">file_operation</el-checkbox>
             <el-checkbox value="summary">summary</el-checkbox>
             <el-checkbox value="translation">translation</el-checkbox>
+            <el-checkbox value="vision">vision</el-checkbox>
           </el-checkbox-group>
         </el-form-item>
         <el-form-item label="API 配置" required>
@@ -283,6 +313,7 @@ type MappingRow = { alias: string; target: string }
 
 const configStore = useConfigStore()
 const activeTab = ref('api')
+const fileChangeInfo = '{{fileChangeInfo}}'
 
 const showApiDialog = ref(false)
 const editingApi = ref(false)
@@ -399,7 +430,7 @@ async function removeWatchFolder(index: number) {
 }
 
 async function selectLive2DModel() {
-  const file = await window.electronAPI.dialog.selectFile([{ name: 'Live2D Model', extensions: ['model3.json'] }])
+  const file = await window.electronAPI.dialog.selectFile([{ name: 'Live2D Model', extensions: ['model3.json', 'json'] }])
   if (file) {
     configStore.config.live2dModelPath = file
   }
@@ -462,6 +493,10 @@ async function saveHotkeys() {
 async function saveTriggerPrompts() {
   await configStore.setConfig('triggerPrompts', { ...configStore.config.triggerPrompts })
   await configStore.setConfig('randomTimerRange', { ...configStore.config.randomTimerRange })
+}
+
+async function saveAgentChainConfig() {
+  await configStore.setConfig('agentChain', { ...configStore.config.agentChain })
 }
 
 const toolList = ref<ToolDefinition[]>([])

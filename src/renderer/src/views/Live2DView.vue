@@ -1,8 +1,8 @@
 <template>
   <div class="live2d-container" @click="handleClick">
     <canvas ref="canvasRef" />
-    <div class="status" v-if="statusText">{{ statusText }}</div>
-    <div class="error" v-if="errorText">{{ errorText }}</div>
+    <div v-if="statusText" class="status">{{ statusText }}</div>
+    <div v-if="errorText" class="error">{{ errorText }}</div>
   </div>
 </template>
 
@@ -124,6 +124,7 @@ function handleResize() {
 
 function handleClick(event: MouseEvent) {
   window.electronAPI.window.toggleChat()
+  window.electronAPI.trigger.invoke({ trigger: 'click_avatar' })
   if (currentModel) {
     currentModel.tap(event.clientX, event.clientY)
   }
@@ -144,7 +145,7 @@ onMounted(async () => {
   if (configStore.config.live2dModelPath) {
     await loadModel(configStore.config.live2dModelPath)
   } else {
-    statusText.value = '请在设置页选择 .model3.json 模型文件'
+    statusText.value = '请先在设置页面选择 .model3.json 模型文件'
   }
 
   const offAction = window.electronAPI.live2d.onAction((action: Live2DAction) => {

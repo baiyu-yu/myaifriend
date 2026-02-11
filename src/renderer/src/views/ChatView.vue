@@ -5,7 +5,7 @@
       <div class="controls">
         <button @click="createConversation" title="新建会话">新建</button>
         <button @click="clearChat" title="清空当前会话">清空</button>
-        <button @click="minimize" title="最小化">一</button>
+        <button @click="minimize" title="最小化">-</button>
         <button @click="close" title="关闭">X</button>
       </div>
     </div>
@@ -44,11 +44,11 @@
 
     <div class="chat-input-area">
       <textarea
+        ref="inputRef"
         v-model="chatStore.currentInput"
         @keydown.enter.exact="handleSend"
         placeholder="输入消息...（Enter 发送，Shift+Enter 换行）"
         rows="1"
-        ref="inputRef"
       />
       <button @click="handleSend()" :disabled="chatStore.isLoading || !chatStore.currentInput.trim()">
         发送

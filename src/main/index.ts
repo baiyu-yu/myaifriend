@@ -152,7 +152,7 @@ class Application {
       },
     })
 
-    this.live2dWindow.setIgnoreMouseEvents(true, { forward: true })
+    this.live2dWindow.setIgnoreMouseEvents(false)
 
     if (process.env.NODE_ENV === 'development') {
       this.live2dWindow.loadURL('http://localhost:5173/#/live2d')
@@ -240,11 +240,15 @@ class Application {
     })
     ipcMain.handle(IPC_CHANNELS.TOOL_LIST, () => this.toolManager.getToolDefinitions())
 
-    ipcMain.handle(IPC_CHANNELS.FILE_READ, async (_e, filePath: string) => this.toolManager.execute('file_read', { path: filePath }))
-    ipcMain.handle(IPC_CHANNELS.FILE_WRITE, async (_e, filePath: string, content: string) => {
-      return this.toolManager.execute('file_write', { path: filePath, content })
-    })
-    ipcMain.handle(IPC_CHANNELS.FILE_LIST, async (_e, folderPath: string) => this.toolManager.execute('file_list', { path: folderPath }))
+    ipcMain.handle(IPC_CHANNELS.FILE_READ, async (_e, filePath: string) =>
+      this.toolManager.execute('file_read', { path: filePath })
+    )
+    ipcMain.handle(IPC_CHANNELS.FILE_WRITE, async (_e, filePath: string, content: string) =>
+      this.toolManager.execute('file_write', { path: filePath, content })
+    )
+    ipcMain.handle(IPC_CHANNELS.FILE_LIST, async (_e, folderPath: string) =>
+      this.toolManager.execute('file_list', { path: folderPath })
+    )
     ipcMain.handle(IPC_CHANNELS.FILE_OPEN_IN_BROWSER, async (_e, filePath: string) => shell.openPath(filePath))
 
     ipcMain.handle(IPC_CHANNELS.LIVE2D_ACTION, (_e, action) => {
@@ -252,6 +256,10 @@ class Application {
     })
     ipcMain.handle(IPC_CHANNELS.LIVE2D_LOAD_MODEL, (_e, modelPath: string) => {
       this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
+    })
+
+    ipcMain.handle(IPC_CHANNELS.TRIGGER_INVOKE, (_e, ctx: InvokeContext) => {
+      this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
     })
 
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_CHAT, () => this.toggleChatWindow())

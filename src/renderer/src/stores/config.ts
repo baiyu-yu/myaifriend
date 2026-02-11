@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { AppConfig, ApiConfig, CharacterConfig, ModelRouteRule } from '../../../common/types'
 import { DEFAULT_CONFIG } from '../../../common/defaults'
 
@@ -35,7 +35,7 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   async function updateApiConfig(apiConfig: ApiConfig) {
-    const idx = config.value.apiConfigs.findIndex(c => c.id === apiConfig.id)
+    const idx = config.value.apiConfigs.findIndex((c) => c.id === apiConfig.id)
     if (idx >= 0) {
       const newList = [...config.value.apiConfigs]
       newList[idx] = apiConfig
@@ -44,14 +44,14 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   async function removeApiConfig(id: string) {
-    const newList = config.value.apiConfigs.filter(c => c.id !== id)
+    const newList = config.value.apiConfigs.filter((c) => c.id !== id)
     await setConfig('apiConfigs', newList)
   }
 
   // --- Characters ---
   const characters = computed(() => config.value.characters)
   const activeCharacter = computed(() =>
-    config.value.characters.find(c => c.id === config.value.activeCharacterId)
+    config.value.characters.find((c) => c.id === config.value.activeCharacterId)
   )
 
   async function addCharacter(char: CharacterConfig) {
@@ -60,7 +60,7 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   async function updateCharacter(char: CharacterConfig) {
-    const idx = config.value.characters.findIndex(c => c.id === char.id)
+    const idx = config.value.characters.findIndex((c) => c.id === char.id)
     if (idx >= 0) {
       const newList = [...config.value.characters]
       newList[idx] = char
@@ -69,7 +69,7 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   async function removeCharacter(id: string) {
-    const newList = config.value.characters.filter(c => c.id !== id)
+    const newList = config.value.characters.filter((c) => c.id !== id)
     await setConfig('characters', newList)
   }
 
@@ -86,7 +86,7 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   async function updateModelRoute(route: ModelRouteRule) {
-    const idx = config.value.modelRoutes.findIndex(r => r.id === route.id)
+    const idx = config.value.modelRoutes.findIndex((r) => r.id === route.id)
     if (idx >= 0) {
       const newList = [...config.value.modelRoutes]
       newList[idx] = route
@@ -95,18 +95,28 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   async function removeModelRoute(id: string) {
-    const newList = config.value.modelRoutes.filter(r => r.id !== id)
+    const newList = config.value.modelRoutes.filter((r) => r.id !== id)
     await setConfig('modelRoutes', newList)
   }
 
   return {
-    config, loading,
-    loadConfig, setConfig,
-    // API
-    apiConfigs, addApiConfig, updateApiConfig, removeApiConfig,
-    // Characters
-    characters, activeCharacter, addCharacter, updateCharacter, removeCharacter, setActiveCharacter,
-    // Model Routes
-    modelRoutes, addModelRoute, updateModelRoute, removeModelRoute,
+    config,
+    loading,
+    loadConfig,
+    setConfig,
+    apiConfigs,
+    addApiConfig,
+    updateApiConfig,
+    removeApiConfig,
+    characters,
+    activeCharacter,
+    addCharacter,
+    updateCharacter,
+    removeCharacter,
+    setActiveCharacter,
+    modelRoutes,
+    addModelRoute,
+    updateModelRoute,
+    removeModelRoute,
   }
 })

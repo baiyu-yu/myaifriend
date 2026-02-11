@@ -23,8 +23,8 @@ export const useChatStore = defineStore('chat', () => {
 
   const configStore = useConfigStore()
 
-  const activeConversation = computed(() =>
-    conversations.value.find((item) => item.id === activeConversationId.value) || null
+  const activeConversation = computed(
+    () => conversations.value.find((item) => item.id === activeConversationId.value) || null
   )
 
   function buildGreetingMessages(): ChatMessage[] {

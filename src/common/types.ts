@@ -17,6 +17,7 @@ export type TaskType =
   | 'file_operation'
   | 'summary'
   | 'translation'
+  | 'vision'
 
 export interface ModelRouteRule {
   id: string
@@ -135,6 +136,15 @@ export interface AppConfig {
   triggerPrompts: Record<InvokeTrigger, string>
   live2dModelPath: string
   live2dActionMap: Live2DActionMap
+  agentChain: {
+    enableAutoTaskRouting: boolean
+    enableContextCompression: boolean
+    compressionThresholdTokens: number
+    compressionKeepRecentMessages: number
+    enableMemory: boolean
+    memoryTopK: number
+    memoryMaxItems: number
+  }
   window: {
     chatWidth: number
     chatHeight: number

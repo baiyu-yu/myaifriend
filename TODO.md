@@ -1,9 +1,9 @@
-# MyAIFriend - 待办与进度
+# MyAIFriend TODO 与进度
 
-## 目标
-- 提供开箱即用的 Windows 单文件 `exe`（用户无需安装开发环境）
-- 支持 GitHub 自动构建与自动发布
-- 持续完善 Live2D、插件安全和自动更新能力
+## 项目目标
+- 提供开箱即用的 Windows 单文件 `exe`
+- 支持 GitHub 自动构建与发布
+- 构建可落地的多模型 Agent 工作链（自动路由、上下文压缩、记忆管理）
 
 ## 已完成
 
@@ -11,65 +11,64 @@
 - [x] Electron + Vue3 + Vite + TypeScript 初始化
 - [x] 主进程 / 预加载 / 渲染进程 IPC 通信
 - [x] 开发热重载
-- [x] 项目目录规范
 
 ### Phase 2 配置系统
-- [x] 统一配置模型（`AppConfig`）
+- [x] 统一配置模型 `AppConfig`
 - [x] `electron-store` 持久化
-- [x] API 配置管理（URL/Token/默认模型）
-- [x] 角色设定（system prompt）
+- [x] API 配置管理
+- [x] 角色设定
 - [x] 模型路由配置
 
 ### Phase 3 对话核心
-- [x] OpenAI 兼容 API 适配
-- [x] 会话历史管理（创建/切换/重命名/删除/持久化）
-- [x] 任务类型模型路由
+- [x] OpenAI 兼容 API 接入
+- [x] 会话历史管理（新建/切换/重命名/删除/持久化）
 - [x] Tool Calling 基础流程
-- [x] 工具注册与插件发现（基础版）
 
 ### Phase 4 工具系统
-- [x] `ITool` 接口规范
-- [x] 文件读取工具（txt/doc/docx/xlsx/html/图片信息）
-- [x] 文件写入工具（txt/html/xlsx）
-- [x] 目录列举工具
-- [x] 浏览器打开工具
-- [x] Live2D 控制工具（事件派发）
-- [x] 插件安全校验（基础版：后缀限制/命名约束/大小限制）
+- [x] 文件读写、目录列举、浏览器打开工具
+- [x] Live2D 控制工具（事件分发）
+- [x] 插件发现与基础安全校验
 
 ### Phase 5 桌面交互
 - [x] 全局快捷键
 - [x] 系统托盘
 - [x] 悬浮聊天窗口
-- [x] 文件夹监听（chokidar）
-- [x] 多触发源提示词拼接
-- [x] 修复退出逻辑（托盘“退出程序”可正常关闭进程）
+- [x] 文件夹监听触发
+- [x] 随机定时触发
+- [x] 退出流程修复
+
+### Phase 6 Live2D
+- [x] `pixi-live2d-display` 渲染接入
+- [x] `.model3.json` 加载链路
+- [x] 动作/表情映射（GUI 可编辑）
 
 ### Phase 7 GUI 设置
-- [x] 设置主页面
-- [x] API 配置页
-- [x] 角色设定页
-- [x] 路由配置页
-- [x] Live2D 设置页
-- [x] 文件夹监听页
-- [x] 快捷键页
-- [x] 工具列表页
+- [x] API/角色/路由/Live2D/文件夹/快捷键/工具列表/触发词页面
+- [x] GUI 乱码与模板异常修复
+- [x] 工作链设置页（自动路由、压缩、记忆）
 
 ### Phase 8 打包交付
 - [x] electron-builder 配置
-- [x] 单文件 `portable exe` 打包脚本
-- [x] 程序图标占位（`build/icon.png`）
-- [x] GitHub Actions autobuild（push main 自动构建 artifact）
-- [x] GitHub 标签发布（`v*` 自动上传 Release）
+- [x] portable exe 打包脚本
+- [x] 图标配置（`build/icon.png`）
+- [x] GitHub Actions autobuild（push main）
+- [x] Release 发布（tag `v*`）
+- [x] 8.7 打包回归测试清单（安装、启动、退出、配置读写、工具调用）
+
+### Phase 9 多模型 Agent 工作链
+- [x] 自动任务识别（chat/summary/translation/file_operation/roleplay/tool_call/vision）
+- [x] 模型路由到对应任务
+- [x] 长上下文压缩（超阈值自动摘要）
+- [x] 长期记忆管理（提取、检索、注入）
 
 ## 未完成（当前重点）
 
-### Phase 6 Live2D
-- [x] 6.1 接入 `pixi-live2d-display` 真实渲染（基础版）
-- [x] 6.2 支持 `.model3.json` / `.moc3` 模型链路（基础版）
-- [x] 6.3 AI 驱动动作/表情映射（GUI 可编辑，基础版）
-
-### Phase 8 交付完善
-- [x] 8.7 打包回归测试清单（安装、启动、退出、配置读写、工具调用）
-
 ### 工程质量
 - [ ] 增加关键链路自动化测试（IPC、配置、会话、打包后启动）
+- [ ] 补充 AI 工作链回归测试（任务路由正确性、压缩触发、记忆注入）
+- [ ] 建立最低可用 E2E 烟雾测试（启动、发送消息、保存配置、退出）
+
+### 体验优化
+- [ ] 在聊天 GUI 中增加“本次推理使用模型”可视化标记
+- [ ] 在设置页增加“任务分类规则自定义”能力
+- [ ] 记忆管理页面（查看/删除/清空记忆）

@@ -3,14 +3,12 @@ import { Conversation, IPC_CHANNELS, InvokeContext, Live2DAction } from '../comm
 
 /** 暴露给渲染进程的 API */
 const electronAPI = {
-  // --- Config ---
   config: {
     get: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.CONFIG_GET, key),
     set: (key: string, value: unknown) => ipcRenderer.invoke(IPC_CHANNELS.CONFIG_SET, key, value),
     getAll: () => ipcRenderer.invoke(IPC_CHANNELS.CONFIG_GET_ALL),
   },
 
-  // --- Chat ---
   chat: {
     send: (messages: unknown[], apiConfigId?: string, model?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.CHAT_SEND, messages, apiConfigId, model),
@@ -29,28 +27,23 @@ const electronAPI = {
     historyDelete: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CHAT_HISTORY_DELETE, id),
   },
 
-  // --- Tools ---
   tools: {
     execute: (name: string, args: Record<string, unknown>) =>
       ipcRenderer.invoke(IPC_CHANNELS.TOOL_EXECUTE, name, args),
     list: () => ipcRenderer.invoke(IPC_CHANNELS.TOOL_LIST),
   },
 
-  // --- File Operations ---
   file: {
     read: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_READ, filePath),
     write: (filePath: string, content: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.FILE_WRITE, filePath, content),
     list: (folderPath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_LIST, folderPath),
-    openInBrowser: (filePath: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.FILE_OPEN_IN_BROWSER, filePath),
+    openInBrowser: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_OPEN_IN_BROWSER, filePath),
   },
 
-  // --- Live2D ---
   live2d: {
     action: (action: Live2DAction) => ipcRenderer.invoke(IPC_CHANNELS.LIVE2D_ACTION, action),
-    loadModel: (modelPath: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath),
+    loadModel: (modelPath: string) => ipcRenderer.invoke(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath),
     onAction: (callback: (action: Live2DAction) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, action: Live2DAction) => callback(action)
       ipcRenderer.on(IPC_CHANNELS.LIVE2D_ACTION, listener)
@@ -63,7 +56,6 @@ const electronAPI = {
     },
   },
 
-  // --- Window ---
   window: {
     toggleChat: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_TOGGLE_CHAT),
     toggleLive2D: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_TOGGLE_LIVE2D),
@@ -71,11 +63,9 @@ const electronAPI = {
     close: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_CLOSE),
   },
 
-  // --- Events from main process ---
   on: {
     fileWatchEvent: (callback: (event: { type: string; path: string }) => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, data: { type: string; path: string }) =>
-        callback(data)
+      const listener = (_event: Electron.IpcRendererEvent, data: { type: string; path: string }) => callback(data)
       ipcRenderer.on(IPC_CHANNELS.FILE_WATCH_EVENT, listener)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.FILE_WATCH_EVENT, listener)
     },
@@ -86,11 +76,13 @@ const electronAPI = {
     },
   },
 
-  // --- Dialog ---
+  trigger: {
+    invoke: (context: InvokeContext) => ipcRenderer.invoke(IPC_CHANNELS.TRIGGER_INVOKE, context),
+  },
+
   dialog: {
     selectFolder: () => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SELECT_FOLDER),
-    selectFile: (filters?: Electron.FileFilter[]) =>
-      ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SELECT_FILE, filters),
+    selectFile: (filters?: Electron.FileFilter[]) => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SELECT_FILE, filters),
   },
 }
 

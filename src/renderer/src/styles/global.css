@@ -4,20 +4,22 @@
   box-sizing: border-box;
 }
 
-html, body, #app {
+html,
+body,
+#app {
   height: 100%;
   width: 100%;
   overflow: hidden;
   font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
 }
 
-/* 设置页面背景 */
+/* 设置页背景 */
 .settings-layout {
   background: #f5f7fa;
   height: 100vh;
 }
 
-/* 聊天窗口样式 - 透明背景 */
+/* 聊天窗口样式 */
 .chat-window {
   background: rgba(255, 255, 255, 0.95);
   border-radius: 12px;
@@ -139,7 +141,7 @@ html, body, #app {
   cursor: not-allowed;
 }
 
-/* Live2D 窗口 - 完全透明 */
+/* Live2D 窗口 */
 .live2d-container {
   width: 100vw;
   height: 100vh;
@@ -151,13 +153,16 @@ html, body, #app {
 ::-webkit-scrollbar {
   width: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.2);
   border-radius: 3px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.3);
 }

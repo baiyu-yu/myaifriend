@@ -1,47 +1,49 @@
 # MyAIFriend
 
-基于 Electron + Vue 3 + TypeScript 的桌面 AI 助手。
+基于 Electron + Vue3 + TypeScript 的桌面 AI 助手，支持多模型路由、工具调用、会话持久化与 Live2D 交互。
 
 ## 核心能力
-- Windows 单文件 `portable exe` 分发
-- API 配置与模型路由
-- 会话历史持久化（新建、切换、重命名、删除）
+- Windows 单文件 `portable exe` 打包发布
+- 多模型路由：按任务类型选择不同模型（普通对话/总结/翻译/视觉等）
+- Agent 工作链：
+  - 自动任务识别与路由
+  - 长上下文自动压缩
+  - 长期记忆注入（偏好/身份/习惯）
 - Tool Calling（文件、目录、浏览器、Live2D 控制）
-- Live2D 动作/表情映射表（设置页可编辑）
-- GitHub Actions 自动构建与标签发布
+- 会话历史持久化（新建、切换、重命名、删除）
+- GitHub Actions 自动构建与 Release 发布
 
-## 环境要求（开发）
+## 技术栈
+- Electron
+- Vue 3 + Vite
+- TypeScript
+- Element Plus
+- electron-builder
+
+## 开发环境
 - Node.js 20+
 - npm 10+
-- Windows
-
-普通用户无需安装 Node，只需下载构建好的 `exe` 即可运行。
+- Windows（打包目标为 Windows）
 
 ## 本地开发
-安装依赖：
 ```bash
 npm install
-```
-
-启动开发：
-```bash
 npm run dev:electron
 ```
 
-类型检查：
+## 类型检查
 ```bash
 npx tsc -p tsconfig.main.json --noEmit
 npx vue-tsc -p tsconfig.renderer.json --noEmit
 ```
 
 ## 打包
-
-默认单文件 exe：
+默认单文件便携版：
 ```bash
 npm run pack
 ```
 
-显式 portable：
+显式便携版：
 ```bash
 npm run pack:portable
 ```
@@ -54,38 +56,37 @@ npm run pack:installer
 产物目录：
 - `release/*.exe`
 
-程序图标占位文件：
+图标文件：
 - `build/icon.png`
 
 ## GitHub 自动构建（autobuild）
 工作流：
 - `.github/workflows/autobuild-windows.yml`
 
-触发：
-- `push main`：自动构建 portable exe 并上传 Artifact
+触发方式：
+- `push main`：自动构建 portable exe 并上传 artifact
 - `tag v*`：自动构建并上传 GitHub Release 资产
-- 手动触发：`workflow_dispatch`
+- `workflow_dispatch`：手动触发
 
-标签发布示例：
+示例：
 ```bash
 git tag v1.0.1
 git push origin v1.0.1
 ```
 
-## 插件工具（基础版）
-扫描目录：
-- `app.getPath('userData')/tools`
+## 多模型与工作链配置说明
+在“设置 -> 模型路由 / 工作链”中配置：
+- 为 `chat / summary / translation / vision` 配置不同模型
+- 打开“自动任务路由”
+- 打开“上下文压缩”（并设置阈值）
+- 打开“长期记忆”（并设置注入条数与上限）
 
-支持后缀：
-- `.js` / `.cjs` / `.mjs`
+推荐策略：
+1. `chat` 使用性价比模型
+2. `summary` 使用便宜且稳定的长文本模型
+3. `translation` 使用专门翻译模型
+4. `vision` 使用多模态模型
 
-基础安全策略：
-- 文件名需包含 `.tool.`
-- 单文件大小上限 2MB
-- 默认导出需符合 `ITool`
-
-## 当前未完成重点
-- Live2D 真实渲染与 `.moc3` 模型链路
-- AI 驱动真实表情/动作映射
-- 插件系统更完整的隔离与签名校验
-- 打包回归测试结果自动采集（当前为手工清单）
+## AI 协作规范
+请阅读 `docs/ai-collab-rules.md`。  
+其中包含“每次修改后执行 git add/commit/push 同步远程仓库”的规范流程。
