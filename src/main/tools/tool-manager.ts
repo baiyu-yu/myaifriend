@@ -35,8 +35,8 @@ export class ToolManager {
   /**
    * 基础安全校验策略（未做沙箱）：
    * 1. 仅允许 .js/.cjs/.mjs
-   * 2. 默认需要 .tool 命名后缀（可选，用于降噪）
-   * 3. 文件大小上限 2MB，避免异常大文件
+   * 2. 文件名需包含 .tool.
+   * 3. 文件大小上限 2MB
    */
   async discoverTools(pluginDir: string): Promise<{ loaded: number; errors: string[] }> {
     const errors: string[] = []
@@ -54,7 +54,7 @@ export class ToolManager {
         const fullPath = path.join(pluginDir, entry.name)
         const stat = await fs.stat(fullPath)
         if (stat.size > 2 * 1024 * 1024) {
-          errors.push(`${entry.name}: 文件过大，已拒绝加载（>${2}MB）`)
+          errors.push(`${entry.name}: 文件过大，已拒绝加载（>2MB）`)
           continue
         }
 

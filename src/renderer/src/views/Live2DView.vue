@@ -27,25 +27,28 @@ let currentModel: Live2DModel | null = null
 function toModelUrl(inputPath: string): string {
   const modelPath = inputPath.trim()
   if (!modelPath) return ''
+
   if (/^https?:\/\//i.test(modelPath) || /^file:\/\//i.test(modelPath)) {
     return modelPath
   }
+
   if (/^[a-zA-Z]:\\/.test(modelPath)) {
     const normalized = modelPath.replace(/\\/g, '/')
     return encodeURI(`file:///${normalized}`)
   }
+
   return encodeURI(`file://${modelPath.replace(/\\/g, '/')}`)
 }
 
 function fitModel(model: Live2DModel) {
   if (!pixiApp) return
+
   const stageWidth = window.innerWidth
   const stageHeight = window.innerHeight
-
   const modelWidth = Math.max(1, model.width)
   const modelHeight = Math.max(1, model.height)
-  const scale = Math.min((stageWidth * 0.85) / modelWidth, (stageHeight * 0.9) / modelHeight)
 
+  const scale = Math.min((stageWidth * 0.85) / modelWidth, (stageHeight * 0.9) / modelHeight)
   model.scale.set(scale)
   model.anchor.set(0.5, 1)
   model.x = stageWidth / 2
@@ -54,6 +57,7 @@ function fitModel(model: Live2DModel) {
 
 async function loadModel(modelPath: string) {
   if (!pixiApp || !modelPath) return
+
   const url = toModelUrl(modelPath)
   if (!url) return
 
@@ -78,18 +82,33 @@ async function loadModel(modelPath: string) {
   }
 }
 
+function resolveMappedActionName(action: Live2DAction): string {
+  const map = configStore.config.live2dActionMap
+  if (!map) return action.name
+
+  if (action.type === 'expression') {
+    return map.expression[action.name] || action.name
+  }
+
+  if (action.type === 'motion') {
+    return map.motion[action.name] || action.name
+  }
+
+  return action.name
+}
+
 async function performAction(action: Live2DAction) {
   if (!currentModel) return
 
   try {
     if (action.type === 'expression') {
-      await currentModel.expression(action.name)
+      await currentModel.expression(resolveMappedActionName(action))
       return
     }
 
     if (action.type === 'motion') {
       const priority = action.priority === 3 ? MotionPriority.FORCE : MotionPriority.NORMAL
-      await currentModel.motion(action.name, undefined, priority)
+      await currentModel.motion(resolveMappedActionName(action), undefined, priority)
       return
     }
   } catch (error) {
@@ -142,11 +161,13 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   for (const off of cleanups) off()
+
   if (currentModel && pixiApp) {
     pixiApp.stage.removeChild(currentModel as any)
     currentModel.destroy()
     currentModel = null
   }
+
   if (pixiApp) {
     pixiApp.destroy(true)
     pixiApp = null

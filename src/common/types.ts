@@ -10,35 +10,30 @@ export interface ApiConfig {
   availableModels: string[]
 }
 
+export type TaskType =
+  | 'chat'
+  | 'roleplay'
+  | 'tool_call'
+  | 'file_operation'
+  | 'summary'
+  | 'translation'
+
 export interface ModelRouteRule {
   id: string
   name: string
-  /** 匹配的任务类型 */
   taskTypes: TaskType[]
-  /** 使用的 API 配置 ID */
   apiConfigId: string
-  /** 使用的模型名称 */
   model: string
-  /** 优先级, 数字越小优先级越高 */
   priority: number
 }
 
-export type TaskType =
-  | 'chat'           // 普通对话
-  | 'roleplay'       // 角色扮演
-  | 'tool_call'      // 工具调用决策
-  | 'file_operation'  // 文件操作
-  | 'summary'        // 摘要/总结
-  | 'translation'    // 翻译
-
-// --- Character / Role Play ---
+// --- Character ---
 export interface CharacterConfig {
   id: string
   name: string
   avatar?: string
   systemPrompt: string
   greeting?: string
-  /** Live2D 模型路径 */
   live2dModelPath?: string
 }
 
@@ -97,17 +92,16 @@ export interface ToolResult {
   isError?: boolean
 }
 
-// --- Trigger / Invoke Types ---
+// --- Trigger ---
 export type InvokeTrigger =
-  | 'hotkey'          // 快捷键唤起
-  | 'click_avatar'    // 点击虚拟形象
-  | 'random_timer'    // 随机定时
-  | 'file_change'     // 文件变动
-  | 'text_input'      // 文本框输入
+  | 'hotkey'
+  | 'click_avatar'
+  | 'random_timer'
+  | 'file_change'
+  | 'text_input'
 
 export interface InvokeContext {
   trigger: InvokeTrigger
-  /** 文件变动时的额外信息 */
   fileChangeInfo?: {
     type: 'add' | 'change' | 'unlink'
     filePath: string
@@ -118,34 +112,29 @@ export interface InvokeContext {
 export interface Live2DAction {
   type: 'expression' | 'motion' | 'speak'
   name: string
-  /** motion 的优先级 */
   priority?: number
+}
+
+export interface Live2DActionMap {
+  expression: Record<string, string>
+  motion: Record<string, string>
 }
 
 // --- App Config ---
 export interface AppConfig {
-  /** API 配置列表 */
   apiConfigs: ApiConfig[]
-  /** 模型路由规则 */
   modelRoutes: ModelRouteRule[]
-  /** 角色配置列表 */
   characters: CharacterConfig[]
-  /** 当前使用的角色 ID */
   activeCharacterId: string
-  /** 快捷键配置 */
   hotkeys: {
     toggleChat: string
     toggleLive2D: string
   }
-  /** 监听的文件夹路径 */
   watchFolders: string[]
-  /** 随机唤起的时间范围(分钟) */
   randomTimerRange: { min: number; max: number }
-  /** 各种唤起方式的提示词模板 */
   triggerPrompts: Record<InvokeTrigger, string>
-  /** Live2D 模型路径 */
   live2dModelPath: string
-  /** 窗口配置 */
+  live2dActionMap: Live2DActionMap
   window: {
     chatWidth: number
     chatHeight: number
@@ -154,7 +143,7 @@ export interface AppConfig {
   }
 }
 
-// --- IPC Channel Definitions ---
+// --- IPC Channels ---
 export const IPC_CHANNELS = {
   // Config
   CONFIG_GET: 'config:get',

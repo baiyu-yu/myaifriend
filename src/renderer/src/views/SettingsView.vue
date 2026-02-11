@@ -61,7 +61,7 @@
       </el-tab-pane>
 
       <el-tab-pane label="Live2D" name="live2d">
-        <el-form label-width="140px" style="max-width: 720px">
+        <el-form label-width="140px" style="max-width: 860px">
           <el-form-item label="模型文件">
             <el-input v-model="configStore.config.live2dModelPath" placeholder="选择 .model3.json 文件" readonly>
               <template #append>
@@ -76,9 +76,61 @@
             <el-input-number v-model="configStore.config.window.live2dHeight" :min="120" :max="1200" />
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" @click="saveLive2DConfig">保存</el-button>
+            <el-button type="primary" @click="saveLive2DConfig">保存模型与窗口设置</el-button>
           </el-form-item>
         </el-form>
+
+        <el-divider content-position="left">动作/表情映射（别名 => 实际名称）</el-divider>
+
+        <div class="mapping-block">
+          <div class="mapping-header">
+            <span>表情映射（expression）</span>
+            <el-button size="small" type="primary" @click="addExpressionRow">新增</el-button>
+          </div>
+          <el-table :data="expressionRows" border stripe>
+            <el-table-column label="别名">
+              <template #default="{ row }">
+                <el-input v-model="row.alias" placeholder="如: 开心" />
+              </template>
+            </el-table-column>
+            <el-table-column label="实际表情名称">
+              <template #default="{ row }">
+                <el-input v-model="row.target" placeholder="如: exp_smile_01" />
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="100">
+              <template #default="{ $index }">
+                <el-button size="small" type="danger" @click="removeExpressionRow($index)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <div class="mapping-block">
+          <div class="mapping-header">
+            <span>动作映射（motion）</span>
+            <el-button size="small" type="primary" @click="addMotionRow">新增</el-button>
+          </div>
+          <el-table :data="motionRows" border stripe>
+            <el-table-column label="别名">
+              <template #default="{ row }">
+                <el-input v-model="row.alias" placeholder="如: 点头" />
+              </template>
+            </el-table-column>
+            <el-table-column label="实际动作组名">
+              <template #default="{ row }">
+                <el-input v-model="row.target" placeholder="如: TapBody" />
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="100">
+              <template #default="{ $index }">
+                <el-button size="small" type="danger" @click="removeMotionRow($index)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <el-button type="success" @click="saveLive2DActionMap">保存映射表</el-button>
       </el-tab-pane>
 
       <el-tab-pane label="文件夹监听" name="folders">
@@ -227,6 +279,8 @@ import { v4 as uuidv4 } from 'uuid'
 import { useConfigStore } from '../stores/config'
 import type { ApiConfig, CharacterConfig, ModelRouteRule, TaskType, ToolDefinition } from '../../../common/types'
 
+type MappingRow = { alias: string; target: string }
+
 const configStore = useConfigStore()
 const activeTab = ref('api')
 
@@ -356,6 +410,51 @@ async function saveLive2DConfig() {
   await configStore.setConfig('window', { ...configStore.config.window })
 }
 
+const expressionRows = ref<MappingRow[]>([])
+const motionRows = ref<MappingRow[]>([])
+
+function mapToRows(mapObj: Record<string, string>): MappingRow[] {
+  return Object.entries(mapObj).map(([alias, target]) => ({ alias, target }))
+}
+
+function rowsToMap(rows: MappingRow[]): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const row of rows) {
+    const alias = row.alias.trim()
+    const target = row.target.trim()
+    if (alias && target) result[alias] = target
+  }
+  return result
+}
+
+function syncActionMapRowsFromConfig() {
+  expressionRows.value = mapToRows(configStore.config.live2dActionMap.expression || {})
+  motionRows.value = mapToRows(configStore.config.live2dActionMap.motion || {})
+}
+
+function addExpressionRow() {
+  expressionRows.value.push({ alias: '', target: '' })
+}
+
+function removeExpressionRow(index: number) {
+  expressionRows.value.splice(index, 1)
+}
+
+function addMotionRow() {
+  motionRows.value.push({ alias: '', target: '' })
+}
+
+function removeMotionRow(index: number) {
+  motionRows.value.splice(index, 1)
+}
+
+async function saveLive2DActionMap() {
+  await configStore.setConfig('live2dActionMap', {
+    expression: rowsToMap(expressionRows.value),
+    motion: rowsToMap(motionRows.value),
+  })
+}
+
 async function saveHotkeys() {
   await configStore.setConfig('hotkeys', { ...configStore.config.hotkeys })
 }
@@ -379,6 +478,7 @@ async function loadTools() {
 
 onMounted(async () => {
   await configStore.loadConfig()
+  syncActionMapRowsFromConfig()
   await loadTools()
 })
 </script>
@@ -413,5 +513,16 @@ onMounted(async () => {
 
 .active {
   border-color: #409eff;
+}
+
+.mapping-block {
+  margin-bottom: 14px;
+}
+
+.mapping-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
 </style>

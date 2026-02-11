@@ -26,6 +26,10 @@ export const DEFAULT_CONFIG: AppConfig = {
     text_input: '',
   },
   live2dModelPath: '',
+  live2dActionMap: {
+    expression: {},
+    motion: {},
+  },
   window: {
     chatWidth: 400,
     chatHeight: 600,
