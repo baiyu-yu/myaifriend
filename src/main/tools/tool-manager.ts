@@ -8,11 +8,8 @@ import { FileListTool } from './builtin/file-list'
 import { OpenBrowserTool } from './builtin/open-browser'
 import { Live2DControlTool } from './builtin/live2d-control'
 
-/** 所有工具都需要实现该接口。 */
 export interface ITool {
-  /** 工具定义（用于 function calling）。 */
   definition: ToolDefinition
-  /** 执行工具。 */
   execute(args: Record<string, unknown>): Promise<ToolResult>
 }
 
@@ -36,8 +33,10 @@ export class ToolManager {
   }
 
   /**
-   * 自动发现并加载插件工具。
-   * 约定：插件导出 `default`，且该值为 ITool 实例或返回 ITool 的工厂函数。
+   * 基础安全校验策略（未做沙箱）：
+   * 1. 仅允许 .js/.cjs/.mjs
+   * 2. 默认需要 .tool 命名后缀（可选，用于降噪）
+   * 3. 文件大小上限 2MB，避免异常大文件
    */
   async discoverTools(pluginDir: string): Promise<{ loaded: number; errors: string[] }> {
     const errors: string[] = []
@@ -50,8 +49,15 @@ export class ToolManager {
 
         const ext = path.extname(entry.name).toLowerCase()
         if (!['.js', '.cjs', '.mjs'].includes(ext)) continue
+        if (!entry.name.includes('.tool.')) continue
 
         const fullPath = path.join(pluginDir, entry.name)
+        const stat = await fs.stat(fullPath)
+        if (stat.size > 2 * 1024 * 1024) {
+          errors.push(`${entry.name}: 文件过大，已拒绝加载（>${2}MB）`)
+          continue
+        }
+
         try {
           const mod = await import(pathToFileURL(fullPath).href)
           const candidate = mod.default
