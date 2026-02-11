@@ -1,0 +1,187 @@
+<template>
+  <div class="chat-window">
+    <div class="title-bar">
+      <span>{{ characterName }}</span>
+      <div class="controls">
+        <button @click="createConversation" title="新建会话">新建</button>
+        <button @click="clearChat" title="清空当前会话">清空</button>
+        <button @click="minimize" title="最小化">一</button>
+        <button @click="close" title="关闭">X</button>
+      </div>
+    </div>
+
+    <div class="conversation-bar">
+      <select v-model="chatStore.activeConversationId" @change="switchConversation">
+        <option v-for="item in chatStore.conversations" :key="item.id" :value="item.id">
+          {{ item.title }}
+        </option>
+      </select>
+      <button class="danger" @click="deleteConversation">删除</button>
+    </div>
+
+    <div class="chat-messages" ref="messagesContainer">
+      <div v-for="msg in visibleMessages" :key="msg.id" class="chat-message" :class="msg.role">
+        <div class="bubble">
+          <div v-if="msg.role === 'tool'" class="tool-result">
+            <span class="tool-label">工具结果</span>
+            <pre>{{ msg.content }}</pre>
+          </div>
+          <template v-else>{{ msg.content }}</template>
+        </div>
+      </div>
+
+      <div v-if="chatStore.isLoading" class="chat-message assistant">
+        <div class="bubble loading-dots">
+          <span>.</span><span>.</span><span>.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-input-area">
+      <textarea
+        v-model="chatStore.currentInput"
+        @keydown.enter.exact="handleSend"
+        placeholder="输入消息...（Enter 发送，Shift+Enter 换行）"
+        rows="1"
+        ref="inputRef"
+      />
+      <button @click="handleSend()" :disabled="chatStore.isLoading || !chatStore.currentInput.trim()">
+        发送
+      </button>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { useChatStore } from '../stores/chat'
+import { useConfigStore } from '../stores/config'
+import type { InvokeContext } from '../../../common/types'
+
+const chatStore = useChatStore()
+const configStore = useConfigStore()
+
+const messagesContainer = ref<HTMLElement>()
+const inputRef = ref<HTMLTextAreaElement>()
+
+const characterName = computed(() => configStore.activeCharacter?.name || 'AI 助手')
+const visibleMessages = computed(() => chatStore.messages.filter((m) => m.role !== 'system'))
+
+onMounted(async () => {
+  await configStore.loadConfig()
+  await chatStore.initConversation()
+  window.electronAPI.on.triggerInvoke((context: InvokeContext) => {
+    chatStore.handleTrigger(context)
+  })
+})
+
+watch(
+  () => chatStore.messages.length,
+  () => {
+    nextTick(() => {
+      if (messagesContainer.value) {
+        messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+      }
+    })
+  }
+)
+
+function handleSend(e?: KeyboardEvent) {
+  if (e && e.shiftKey) return
+  e?.preventDefault()
+  chatStore.sendMessage(chatStore.currentInput)
+}
+
+async function switchConversation() {
+  if (!chatStore.activeConversationId) return
+  await chatStore.loadConversation(chatStore.activeConversationId)
+}
+
+async function createConversation() {
+  await chatStore.createConversation()
+}
+
+async function deleteConversation() {
+  if (!chatStore.activeConversationId) return
+  await chatStore.deleteConversation(chatStore.activeConversationId)
+}
+
+function minimize() {
+  window.electronAPI.window.minimize()
+}
+
+function close() {
+  window.electronAPI.window.close()
+}
+
+function clearChat() {
+  chatStore.clearMessages()
+}
+</script>
+
+<style scoped>
+.conversation-bar {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.conversation-bar select {
+  flex: 1;
+}
+
+.danger {
+  color: #fff;
+  background: #d9534f;
+  border: none;
+  padding: 0 10px;
+  border-radius: 4px;
+}
+
+.tool-result {
+  font-size: 12px;
+}
+
+.tool-result .tool-label {
+  font-weight: bold;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.tool-result pre {
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 6px;
+  border-radius: 4px;
+}
+
+.loading-dots span {
+  animation: blink 1.4s infinite both;
+  font-size: 18px;
+  margin: 0 2px;
+}
+
+.loading-dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.loading-dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes blink {
+  0%,
+  80%,
+  100% {
+    opacity: 0.2;
+  }
+
+  40% {
+    opacity: 1;
+  }
+}
+</style>
