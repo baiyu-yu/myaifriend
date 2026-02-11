@@ -19,6 +19,11 @@
       <button class="danger" @click="deleteConversation">删除</button>
     </div>
 
+    <div class="conversation-bar">
+      <input v-model="conversationTitle" placeholder="输入会话标题" />
+      <button @click="renameConversation">重命名</button>
+    </div>
+
     <div class="chat-messages" ref="messagesContainer">
       <div v-for="msg in visibleMessages" :key="msg.id" class="chat-message" :class="msg.role">
         <div class="bubble">
@@ -53,7 +58,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { useConfigStore } from '../stores/config'
 import type { InvokeContext } from '../../../common/types'
@@ -63,9 +68,18 @@ const configStore = useConfigStore()
 
 const messagesContainer = ref<HTMLElement>()
 const inputRef = ref<HTMLTextAreaElement>()
+const conversationTitle = ref('')
 
 const characterName = computed(() => configStore.activeCharacter?.name || 'AI 助手')
 const visibleMessages = computed(() => chatStore.messages.filter((m) => m.role !== 'system'))
+
+watch(
+  () => chatStore.activeConversation?.title,
+  (title) => {
+    conversationTitle.value = title || ''
+  },
+  { immediate: true }
+)
 
 onMounted(async () => {
   await configStore.loadConfig()
@@ -101,6 +115,10 @@ async function createConversation() {
   await chatStore.createConversation()
 }
 
+async function renameConversation() {
+  await chatStore.renameConversation(conversationTitle.value)
+}
+
 async function deleteConversation() {
   if (!chatStore.activeConversationId) return
   await chatStore.deleteConversation(chatStore.activeConversationId)
@@ -127,7 +145,8 @@ function clearChat() {
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
-.conversation-bar select {
+.conversation-bar select,
+.conversation-bar input {
   flex: 1;
 }
 

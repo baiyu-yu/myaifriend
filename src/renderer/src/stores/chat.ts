@@ -1,12 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
-import type {
-  ChatMessage,
-  Conversation,
-  ConversationSummary,
-  InvokeContext,
-} from '../../../common/types'
+import type { ChatMessage, Conversation, ConversationSummary, InvokeContext } from '../../../common/types'
 import { useConfigStore } from './config'
 
 function formatNowForTitle(): string {
@@ -96,6 +91,12 @@ export const useChatStore = defineStore('chat', () => {
     await refreshConversationList()
   }
 
+  async function renameConversation(title: string) {
+    const normalized = title.trim()
+    if (!normalized || !activeConversationId.value) return
+    await saveCurrentConversation(normalized)
+  }
+
   async function deleteConversation(id: string) {
     await window.electronAPI.chat.historyDelete(id)
     if (activeConversationId.value === id) {
@@ -161,7 +162,6 @@ export const useChatStore = defineStore('chat', () => {
             name: tc.function.name,
             arguments: JSON.parse(tc.function.arguments),
           }))
-
           messages.value.push(assistantMsg)
 
           const toolCalls = assistantMsg.toolCalls || []
@@ -212,12 +212,14 @@ export const useChatStore = defineStore('chat', () => {
   async function handleTrigger(context: InvokeContext) {
     const config = configStore.config
     let prompt = config.triggerPrompts[context.trigger] || ''
+
     if (context.fileChangeInfo) {
       prompt = prompt.replace(
         '{{fileChangeInfo}}',
         `文件 "${context.fileChangeInfo.filePath}" 发生 "${context.fileChangeInfo.type}" 变动`
       )
     }
+
     if (prompt) {
       await sendMessage(prompt)
     }
@@ -238,6 +240,7 @@ export const useChatStore = defineStore('chat', () => {
     initConversation,
     createConversation,
     loadConversation,
+    renameConversation,
     deleteConversation,
     sendMessage,
     handleTrigger,
