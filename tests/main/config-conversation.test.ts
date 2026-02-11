@@ -14,7 +14,7 @@ test('config manager persists and loads agent chain settings', () => {
   resetTestStore()
   const manager = new ConfigManager()
   const original = manager.getAll()
-  assert.ok(original.agentChain.taskClassifierRules.length > 0)
+  assert.ok(original.agentChain.enableContextCompression !== undefined)
 
   manager.set('agentChain', {
     ...original.agentChain,

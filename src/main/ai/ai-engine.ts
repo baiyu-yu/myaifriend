@@ -1,5 +1,5 @@
 import { ConfigManager } from '../config-manager'
-import { ApiConfig, ChatMessage, TaskClassifierRule, TaskType, ToolDefinition } from '../../common/types'
+import { ApiConfig, ChatMessage, TaskType, ToolDefinition } from '../../common/types'
 import { MemoryManager } from './memory-manager'
 
 interface ChatCompletionMessage {
@@ -42,6 +42,11 @@ type PreparedContext = {
   messages: ChatMessage[]
 }
 
+interface WorkChainStep {
+  taskType: TaskType
+  instruction: string
+}
+
 export function estimateTokens(messages: ChatMessage[]): number {
   const chars = messages.reduce((sum, m) => sum + m.content.length, 0)
   return Math.ceil(chars / 4)
@@ -52,41 +57,6 @@ function getLastUserMessage(messages: ChatMessage[]): ChatMessage | undefined {
     if (messages[i].role === 'user') return messages[i]
   }
   return undefined
-}
-
-export function inferTaskTypeByText(text: string): TaskType {
-  const normalized = text.toLowerCase()
-
-  const hasImageSignal =
-    /!\[.*\]\(.*\)/.test(text) ||
-    /(https?:\/\/\S+\.(png|jpg|jpeg|webp|gif))/i.test(text) ||
-    /(data:image\/[a-z+]+;base64,)/i.test(text) ||
-    /(识别图片|图里|看图|图像|ocr|image)/i.test(text)
-  if (hasImageSignal) return 'vision'
-
-  if (/(翻译|translate|译为)/i.test(text)) return 'translation'
-  if (/(总结|摘要|归纳|总结一下)/i.test(text)) return 'summary'
-  if (/(读取文件|写入文件|文件夹|目录|path|\\.txt|\\.md|\\.json)/i.test(text)) return 'file_operation'
-  if (/(扮演|角色扮演|你现在是|请你饰演)/i.test(text)) return 'roleplay'
-  if (/(调用工具|使用工具|tool)/i.test(text)) return 'tool_call'
-
-  return normalized.length > 0 ? 'chat' : 'chat'
-}
-
-export function inferTaskTypeByRules(text: string, rules: TaskClassifierRule[]): TaskType | null {
-  const sortedRules = [...rules]
-    .filter((rule) => rule.enabled && rule.pattern.trim())
-    .sort((a, b) => a.priority - b.priority)
-
-  for (const rule of sortedRules) {
-    try {
-      const re = new RegExp(rule.pattern, 'i')
-      if (re.test(text)) return rule.taskType
-    } catch {
-      // Ignore invalid user regex and continue with next rule.
-    }
-  }
-  return null
 }
 
 export function shouldCompressContext(messages: ChatMessage[], thresholdTokens: number): boolean {
@@ -114,6 +84,27 @@ function pickMemoryCandidates(text: string): string[] {
   )
 }
 
+const PREMIER_DISPATCH_PROMPT = `你是一个任务调度器（总理模型）。根据用户的输入，分析需要执行的工作链步骤。
+
+可用的任务类型：
+- roleplay: 角色扮演对话
+- context_compression: 上下文压缩
+- memory_fragmentation: 记忆及知识库碎片化处理
+- vision: 图像识别
+- code_generation: 代码编写（特指HTML）
+- premier: 直接由总理模型回答
+
+请以JSON格式返回工作链，格式如下：
+{"chain": [{"taskType": "类型", "instruction": "给该步骤模型的具体指令"}]}
+
+注意：
+1. 大多数普通对话直接返回 premier 类型即可
+2. 只有明确需要特定能力时才拆分工作链
+3. chain数组按执行顺序排列
+4. 每个步骤的instruction应包含完整的上下文信息
+
+只返回JSON，不要其他内容。`
+
 export class AIEngine {
   private configManager: ConfigManager
   private memoryManager: MemoryManager
@@ -128,37 +119,114 @@ export class AIEngine {
     messages: ChatMessage[],
     apiConfigId?: string,
     model?: string,
-    taskType: TaskType = 'chat',
+    taskType: TaskType = 'premier',
     tools?: ToolDefinition[]
   ): Promise<ChatCompletionResponse> {
     const allConfig = this.configManager.getAll()
     const chain = allConfig.agentChain
-    const latestUserText = getLastUserMessage(messages)?.content || ''
-    const inferredTask = chain.enableAutoTaskRouting
-      ? inferTaskTypeByRules(latestUserText, chain.taskClassifierRules) || inferTaskTypeByText(latestUserText)
-      : taskType
 
-    const prepared = await this.prepareContext(messages, inferredTask)
-    const { apiConfig, modelName } = this.resolveModelRoute(prepared.taskType, apiConfigId, model)
+    const prepared = await this.prepareContext(messages, taskType)
 
-    if (!apiConfig) {
-      throw new Error('未配置可用 API，请先在设置页添加 API 配置。')
+    // Use premier model to determine work chain
+    const workChain = await this.dispatchViaPremier(prepared.messages)
+
+    let finalResponse: ChatCompletionResponse | null = null
+    let accumulatedContext = [...prepared.messages]
+
+    for (const step of workChain) {
+      const { apiConfig, modelName } = this.resolveModelRoute(step.taskType, apiConfigId, model)
+
+      if (!apiConfig) {
+        throw new Error('未配置可用 API，请先在设置页添加 API 配置。')
+      }
+      if (!modelName) {
+        throw new Error(`任务类型 "${step.taskType}" 未配置模型，请在设置中配置。`)
+      }
+
+      this.abortController = new AbortController()
+
+      // If there's a specific instruction from the premier model, inject it
+      const stepMessages: ChatMessage[] = step.instruction
+        ? [
+            ...accumulatedContext.filter((m) => m.role === 'system'),
+            {
+              id: `chain-${Date.now()}`,
+              role: 'system' as const,
+              content: `当前任务指令：${step.instruction}`,
+              timestamp: Date.now(),
+            },
+            ...accumulatedContext.filter((m) => m.role !== 'system'),
+          ]
+        : accumulatedContext
+
+      const requestBody = this.buildRequestBody(modelName, stepMessages, tools)
+      finalResponse = await this.requestChatCompletion(apiConfig, requestBody)
+
+      const assistantContent = finalResponse.choices?.[0]?.message?.content || ''
+
+      // Accumulate the response for multi-step chains
+      if (workChain.length > 1 && assistantContent) {
+        accumulatedContext.push({
+          id: `step-result-${Date.now()}`,
+          role: 'assistant',
+          content: assistantContent,
+          timestamp: Date.now(),
+        })
+      }
+
+      finalResponse.meta = {
+        model: modelName,
+        taskType: step.taskType,
+      }
     }
-    if (!modelName) {
-      throw new Error('当前任务未匹配到模型，请先在模型路由中配置。')
+
+    if (!finalResponse) {
+      throw new Error('工作链为空，无法生成回复。')
     }
 
-    this.abortController = new AbortController()
-    const requestBody = this.buildRequestBody(modelName, prepared.messages, tools)
-    const response = await this.requestChatCompletion(apiConfig, requestBody)
-
-    const assistantContent = response.choices?.[0]?.message?.content || ''
+    const assistantContent = finalResponse.choices?.[0]?.message?.content || ''
     this.rememberIfNeeded(prepared.messages, assistantContent)
-    response.meta = {
-      model: modelName,
-      taskType: prepared.taskType,
+    return finalResponse
+  }
+
+  private async dispatchViaPremier(messages: ChatMessage[]): Promise<WorkChainStep[]> {
+    const { apiConfig, modelName } = this.resolveModelRoute('premier')
+
+    if (!apiConfig || !modelName) {
+      // No premier model configured, fallback to direct premier response
+      return [{ taskType: 'premier', instruction: '' }]
     }
-    return response
+
+    const latestUserText = getLastUserMessage(messages)?.content || ''
+    if (!latestUserText.trim()) {
+      return [{ taskType: 'premier', instruction: '' }]
+    }
+
+    try {
+      const response = await this.requestChatCompletion(apiConfig, {
+        model: modelName,
+        messages: [
+          { role: 'system', content: PREMIER_DISPATCH_PROMPT },
+          { role: 'user', content: latestUserText },
+        ],
+      })
+
+      const raw = response.choices?.[0]?.message?.content || ''
+      const jsonMatch = raw.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0])
+        if (Array.isArray(parsed.chain) && parsed.chain.length > 0) {
+          return parsed.chain.map((step: any) => ({
+            taskType: step.taskType || 'premier',
+            instruction: step.instruction || '',
+          }))
+        }
+      }
+    } catch (err) {
+      console.warn('[AIEngine] Premier dispatch failed, falling back to direct response:', err)
+    }
+
+    return [{ taskType: 'premier', instruction: '' }]
   }
 
   private async prepareContext(messages: ChatMessage[], taskType: TaskType): Promise<PreparedContext> {
@@ -198,7 +266,7 @@ export class AIEngine {
 
     let summaryText = '历史上下文较长，已进行压缩摘要。'
     try {
-      const { apiConfig, modelName } = this.resolveModelRoute('summary')
+      const { apiConfig, modelName } = this.resolveModelRoute('context_compression')
       if (apiConfig && modelName) {
         const response = await this.requestChatCompletion(apiConfig, {
           model: modelName,
@@ -322,19 +390,19 @@ export class AIEngine {
       }
     }
 
-    const matchedRoutes = allConfig.modelRoutes
-      .filter((r) => r.taskTypes.includes(taskType))
-      .sort((a, b) => a.priority - b.priority)
-
-    if (matchedRoutes.length > 0) {
-      const route = matchedRoutes[0]
-      const apiConfig = allConfig.apiConfigs.find((c) => c.id === route.apiConfigId) || null
-      return {
-        apiConfig,
-        modelName: route.model,
+    // Use the new modelAssignments
+    const assignment = allConfig.modelAssignments?.[taskType]
+    if (assignment?.apiConfigId && assignment?.model) {
+      const apiConfig = allConfig.apiConfigs.find((c) => c.id === assignment.apiConfigId) || null
+      if (apiConfig) {
+        return {
+          apiConfig,
+          modelName: assignment.model,
+        }
       }
     }
 
+    // Fallback to first API config
     const fallbackApi = allConfig.apiConfigs[0] || null
     return {
       apiConfig: fallbackApi,

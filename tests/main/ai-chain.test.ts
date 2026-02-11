@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { AIEngine, inferTaskTypeByRules, injectMemorySystemPrompt, shouldCompressContext } from '../../src/main/ai/ai-engine'
+import { injectMemorySystemPrompt, shouldCompressContext } from '../../src/main/ai/ai-engine'
 import type { AppConfig, ChatMessage } from '../../src/common/types'
 import { DEFAULT_CONFIG } from '../../src/common/defaults'
 
@@ -14,13 +14,6 @@ function buildConfig(partial?: Partial<AppConfig>): AppConfig {
     },
   }
 }
-
-test('task routing prefers custom classifier rules', () => {
-  const task = inferTaskTypeByRules('请翻译这段内容', [
-    { id: 'r1', name: 'translate', pattern: '翻译', taskType: 'translation', enabled: true, priority: 1 },
-  ])
-  assert.equal(task, 'translation')
-})
 
 test('compression trigger works by token threshold', () => {
   const messages: ChatMessage[] = [
@@ -38,33 +31,49 @@ test('memory injection adds a system message', () => {
   assert.equal(injected.length, 2)
 })
 
-test('ai engine returns routed model metadata', async () => {
+test('ai engine uses premier model for dispatch', async () => {
   const config = buildConfig({
     apiConfigs: [{ id: 'api-1', name: 'local', baseUrl: 'http://fake', apiKey: 'k', defaultModel: 'gpt-a', availableModels: [] }],
-    modelRoutes: [{ id: 'm1', name: 'translate-route', taskTypes: ['translation'], apiConfigId: 'api-1', model: 'gpt-translate', priority: 1 }],
+    modelAssignments: {
+      ...DEFAULT_CONFIG.modelAssignments,
+      premier: { apiConfigId: 'api-1', model: 'gpt-premier' },
+    },
     agentChain: {
       ...DEFAULT_CONFIG.agentChain,
-      enableAutoTaskRouting: true,
       enableMemory: false,
       enableContextCompression: false,
-      taskClassifierRules: [{ id: 'r1', name: 'translate', pattern: '翻译', taskType: 'translation', enabled: true, priority: 1 }],
     },
   })
 
+  const { AIEngine } = await import('../../src/main/ai/ai-engine')
   const engine = new AIEngine({ getAll: () => config } as any)
   const originalFetch = globalThis.fetch
 
-  globalThis.fetch = (async () => ({
-    ok: true,
-    json: async () => ({
-      choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-    }),
-  })) as any
+  let fetchCount = 0
+  globalThis.fetch = (async () => {
+    fetchCount++
+    if (fetchCount === 1) {
+      // Premier dispatch call
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '{"chain":[{"taskType":"premier","instruction":""}]}' }, finish_reason: 'stop' }],
+        }),
+      }
+    }
+    // Actual response
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+      }),
+    }
+  }) as any
 
   try {
-    const result = await engine.chat([{ id: 'u1', role: 'user', content: '请翻译 hello', timestamp: Date.now() }])
-    assert.equal(result.meta?.model, 'gpt-translate')
-    assert.equal(result.meta?.taskType, 'translation')
+    const result = await engine.chat([{ id: 'u1', role: 'user', content: '你好', timestamp: Date.now() }])
+    assert.equal(result.meta?.model, 'gpt-premier')
+    assert.equal(result.meta?.taskType, 'premier')
   } finally {
     globalThis.fetch = originalFetch
   }

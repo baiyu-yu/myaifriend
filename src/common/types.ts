@@ -11,30 +11,28 @@ export interface ApiConfig {
 }
 
 export type TaskType =
-  | 'chat'
   | 'roleplay'
-  | 'tool_call'
-  | 'file_operation'
-  | 'summary'
-  | 'translation'
+  | 'context_compression'
+  | 'memory_fragmentation'
   | 'vision'
+  | 'code_generation'
+  | 'premier'
 
 export interface ModelRouteRule {
   id: string
   name: string
-  taskTypes: TaskType[]
+  taskType: TaskType
   apiConfigId: string
   model: string
-  priority: number
 }
 
-export interface TaskClassifierRule {
-  id: string
-  name: string
-  pattern: string
-  taskType: TaskType
-  enabled: boolean
-  priority: number
+export const TASK_TYPE_LABELS: Record<TaskType, string> = {
+  roleplay: '角色扮演',
+  context_compression: '上下文压缩',
+  memory_fragmentation: '记忆及知识库碎片化',
+  vision: '图像识别',
+  code_generation: '代码编写',
+  premier: '总理模型',
 }
 
 // --- Character ---
@@ -137,7 +135,7 @@ export interface Live2DActionMap {
 // --- App Config ---
 export interface AppConfig {
   apiConfigs: ApiConfig[]
-  modelRoutes: ModelRouteRule[]
+  modelAssignments: Record<TaskType, { apiConfigId: string; model: string }>
   characters: CharacterConfig[]
   activeCharacterId: string
   hotkeys: {
@@ -154,8 +152,6 @@ export interface AppConfig {
     blockDomains: string[]
   }
   agentChain: {
-    enableAutoTaskRouting: boolean
-    taskClassifierRules: TaskClassifierRule[]
     enableContextCompression: boolean
     compressionThresholdTokens: number
     compressionKeepRecentMessages: number
@@ -209,6 +205,7 @@ export const IPC_CHANNELS = {
   // Live2D
   LIVE2D_ACTION: 'live2d:action',
   LIVE2D_LOAD_MODEL: 'live2d:loadModel',
+  LIVE2D_SHOW_REPLY: 'live2d:showReply',
 
   // Window
   WINDOW_TOGGLE_CHAT: 'window:toggleChat',

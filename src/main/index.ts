@@ -143,11 +143,12 @@ class Application {
 
   private createLive2DWindow() {
     const config = this.configManager.getAll()
+    const hasModel = !!config.live2dModelPath
     const icon = this.resolveIconPath()
     this.live2dWindow = new BrowserWindow({
       width: config.window.live2dWidth,
       height: config.window.live2dHeight,
-      show: true,
+      show: hasModel,
       frame: false,
       transparent: true,
       alwaysOnTop: true,
@@ -253,7 +254,12 @@ class Application {
     ipcMain.handle(IPC_CHANNELS.CONFIG_SET, (_e, key: string, value: unknown) => {
       this.configManager.set(key, value)
       if (key === 'live2dModelPath' && typeof value === 'string') {
-        this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, value)
+        if (value) {
+          this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, value)
+          this.live2dWindow?.show()
+        } else {
+          this.live2dWindow?.hide()
+        }
       }
       if (key === 'hotkeys') {
         this.registerGlobalShortcuts()
@@ -300,6 +306,9 @@ class Application {
     ipcMain.handle(IPC_CHANNELS.LIVE2D_LOAD_MODEL, (_e, modelPath: string) => {
       this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
     })
+    ipcMain.handle(IPC_CHANNELS.LIVE2D_SHOW_REPLY, (_e, text: string) => {
+      this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_SHOW_REPLY, text)
+    })
 
     ipcMain.handle(IPC_CHANNELS.TRIGGER_INVOKE, (_e, ctx: InvokeContext) => {
       this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
@@ -331,14 +340,16 @@ class Application {
       }
     })
 
-    ipcMain.handle(IPC_CHANNELS.DIALOG_SELECT_FOLDER, async () => {
-      const result = await dialog.showOpenDialog(this.mainWindow!, {
+    ipcMain.handle(IPC_CHANNELS.DIALOG_SELECT_FOLDER, async (e) => {
+      const win = BrowserWindow.fromWebContents(e.sender) || this.mainWindow!
+      const result = await dialog.showOpenDialog(win, {
         properties: ['openDirectory'],
       })
       return result.canceled ? null : result.filePaths[0]
     })
-    ipcMain.handle(IPC_CHANNELS.DIALOG_SELECT_FILE, async (_e, filters) => {
-      const result = await dialog.showOpenDialog(this.mainWindow!, {
+    ipcMain.handle(IPC_CHANNELS.DIALOG_SELECT_FILE, async (e, filters) => {
+      const win = BrowserWindow.fromWebContents(e.sender) || this.mainWindow!
+      const result = await dialog.showOpenDialog(win, {
         properties: ['openFile'],
         filters,
       })

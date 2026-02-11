@@ -51,6 +51,7 @@ const electronAPI = {
   live2d: {
     action: (action: Live2DAction) => ipcRenderer.invoke(IPC_CHANNELS.LIVE2D_ACTION, action),
     loadModel: (modelPath: string) => ipcRenderer.invoke(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath),
+    showReply: (text: string) => ipcRenderer.invoke(IPC_CHANNELS.LIVE2D_SHOW_REPLY, text),
     onAction: (callback: (action: Live2DAction) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, action: Live2DAction) => callback(action)
       ipcRenderer.on(IPC_CHANNELS.LIVE2D_ACTION, listener)
@@ -60,6 +61,11 @@ const electronAPI = {
       const listener = (_event: Electron.IpcRendererEvent, modelPath: string) => callback(modelPath)
       ipcRenderer.on(IPC_CHANNELS.LIVE2D_LOAD_MODEL, listener)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.LIVE2D_LOAD_MODEL, listener)
+    },
+    onShowReply: (callback: (text: string) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, text: string) => callback(text)
+      ipcRenderer.on(IPC_CHANNELS.LIVE2D_SHOW_REPLY, listener)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.LIVE2D_SHOW_REPLY, listener)
     },
   },
 

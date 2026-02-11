@@ -1,14 +1,14 @@
 <template>
   <div class="settings-page">
     <div class="header-area">
-      <el-button @click="backToHome" circle class="back-btn">
+      <el-button @click="hideSettings" circle class="back-btn">
         <el-icon><Back /></el-icon>
       </el-button>
-      <el-page-header content="设置中心" icon="" title="" @back="backToHome" />
+      <el-page-header content="设置中心" icon="" title="" @back="hideSettings" />
     </div>
 
     <el-tabs v-model="activeTab" class="tabs">
-      <el-tab-pane label="API 配置" name="api">
+      <el-tab-pane label="API 与模型配置" name="api">
         <el-button type="primary" @click="openApiDialogForCreate">新增 API</el-button>
         <el-table :data="configStore.apiConfigs" border stripe style="margin-top: 12px">
           <el-table-column prop="name" label="名称" width="160" />
@@ -21,6 +21,22 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <el-divider content-position="left">模型分配（按功能类型）</el-divider>
+        <el-form label-width="180px" style="max-width: 860px">
+          <el-form-item v-for="(label, key) in taskTypeLabels" :key="key" :label="label">
+            <div style="display: flex; gap: 12px; width: 100%">
+              <el-select v-model="modelAssignmentForm[key].apiConfigId" placeholder="选择 API" style="flex: 1">
+                <el-option label="（未配置）" value="" />
+                <el-option v-for="api in configStore.apiConfigs" :key="api.id" :value="api.id" :label="api.name" />
+              </el-select>
+              <el-input v-model="modelAssignmentForm[key].model" placeholder="模型名称" style="flex: 1" />
+            </div>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="saveModelAssignments">保存模型分配</el-button>
+          </el-form-item>
+        </el-form>
       </el-tab-pane>
 
       <el-tab-pane label="角色设定" name="character">
@@ -45,79 +61,12 @@
         </el-row>
       </el-tab-pane>
 
-      <el-tab-pane label="模型路由" name="route">
-        <el-button type="primary" @click="openRouteDialogForCreate">新增规则</el-button>
-        <el-table :data="configStore.modelRoutes" border stripe style="margin-top: 12px">
-          <el-table-column prop="name" label="规则名称" width="180" />
-          <el-table-column label="任务类型">
-            <template #default="{ row }">
-              <el-tag v-for="t in row.taskTypes" :key="t" style="margin-right: 6px">{{ t }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="model" label="模型" width="180" />
-          <el-table-column prop="priority" label="优先级" width="100" />
-          <el-table-column label="操作" width="160">
-            <template #default="{ row }">
-              <el-button size="small" @click="openRouteDialogForEdit(row)">编辑</el-button>
-              <el-button size="small" type="danger" @click="configStore.removeModelRoute(row.id)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
-
       <el-tab-pane label="工作链" name="chain">
         <el-form label-width="220px" style="max-width: 760px">
-          <el-form-item label="启用自动任务路由">
-            <el-switch v-model="configStore.config.agentChain.enableAutoTaskRouting" />
-          </el-form-item>
-          <el-form-item label="任务分类规则（正则）">
-            <div style="width: 100%">
-              <div class="mapping-header" style="margin-bottom: 8px">
-                <span>按优先级从小到大匹配，命中即采用该任务类型</span>
-                <el-button size="small" type="primary" @click="addTaskRule">新增规则</el-button>
-              </div>
-              <el-table :data="taskClassifierRows" border stripe>
-                <el-table-column label="启用" width="80">
-                  <template #default="{ row }">
-                    <el-switch v-model="row.enabled" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="名称" width="140">
-                  <template #default="{ row }">
-                    <el-input v-model="row.name" placeholder="规则名" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="任务类型" width="140">
-                  <template #default="{ row }">
-                    <el-select v-model="row.taskType">
-                      <el-option label="chat" value="chat" />
-                      <el-option label="roleplay" value="roleplay" />
-                      <el-option label="tool_call" value="tool_call" />
-                      <el-option label="file_operation" value="file_operation" />
-                      <el-option label="summary" value="summary" />
-                      <el-option label="translation" value="translation" />
-                      <el-option label="vision" value="vision" />
-                    </el-select>
-                  </template>
-                </el-table-column>
-                <el-table-column label="优先级" width="120">
-                  <template #default="{ row }">
-                    <el-input-number v-model="row.priority" :min="1" :max="9999" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="匹配正则">
-                  <template #default="{ row }">
-                    <el-input v-model="row.pattern" placeholder="例如：翻译|translate|译为" />
-                  </template>
-                </el-table-column>
-                <el-table-column label="操作" width="90">
-                  <template #default="{ $index }">
-                    <el-button size="small" type="danger" @click="removeTaskRule($index)">删除</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-              <el-text type="info">注意：这是 JavaScript 正则，错误规则会被自动忽略。</el-text>
-            </div>
+          <el-form-item label="工作链调度说明">
+            <el-text type="info">
+              工作链由总理模型自动分析用户输入并生成调度方案，无需手动配置正则规则。请确保在"API 与模型配置"中为总理模型分配了可用的 API 和模型。
+            </el-text>
           </el-form-item>
           <el-form-item label="启用上下文压缩">
             <el-switch v-model="configStore.config.agentChain.enableContextCompression" />
@@ -393,66 +342,30 @@
         <el-button type="primary" @click="saveChar">保存</el-button>
       </template>
     </el-dialog>
-
-    <el-dialog v-model="showRouteDialog" :title="editingRoute ? '编辑路由' : '新增路由'" width="560px">
-      <el-form label-width="120px">
-        <el-form-item label="规则名" required>
-          <el-input v-model="routeForm.name" />
-        </el-form-item>
-        <el-form-item label="任务类型" required>
-          <el-checkbox-group v-model="routeForm.taskTypes">
-            <el-checkbox value="chat">chat</el-checkbox>
-            <el-checkbox value="roleplay">roleplay</el-checkbox>
-            <el-checkbox value="tool_call">tool_call</el-checkbox>
-            <el-checkbox value="file_operation">file_operation</el-checkbox>
-            <el-checkbox value="summary">summary</el-checkbox>
-            <el-checkbox value="translation">translation</el-checkbox>
-            <el-checkbox value="vision">vision</el-checkbox>
-          </el-checkbox-group>
-        </el-form-item>
-        <el-form-item label="API 配置" required>
-          <el-select v-model="routeForm.apiConfigId" placeholder="请选择">
-            <el-option v-for="api in configStore.apiConfigs" :key="api.id" :value="api.id" :label="api.name" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="模型" required>
-          <el-input v-model="routeForm.model" />
-        </el-form-item>
-        <el-form-item label="优先级">
-          <el-input-number v-model="routeForm.priority" :min="1" :max="100" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="showRouteDialog = false">取消</el-button>
-        <el-button type="primary" @click="saveRoute">保存</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { v4 as uuidv4 } from 'uuid'
 import { useConfigStore } from '../stores/config'
 import { Back } from '@element-plus/icons-vue'
 import type {
   ApiConfig,
   CharacterConfig,
-  ModelRouteRule,
-  TaskClassifierRule,
   TaskType,
   ToolDefinition,
 } from '../../../common/types'
+import { TASK_TYPE_LABELS } from '../../../common/types'
 
 type MappingRow = { alias: string; target: string }
 type MemoryRow = { id: string; sourceId: string; text: string; createdAt: number; updatedAt: number; hits: number }
 type MemoryGroupRow = { sourceId: string; count: number; preview: string; ids: string[] }
 
 const configStore = useConfigStore()
-const router = useRouter()
 const activeTab = ref('api')
 const fileChangeInfo = '{{fileChangeInfo}}'
+const taskTypeLabels = TASK_TYPE_LABELS
 
 const showApiDialog = ref(false)
 const editingApi = ref(false)
@@ -464,6 +377,31 @@ const apiForm = reactive<ApiConfig>({
   defaultModel: '',
   availableModels: [],
 })
+
+const modelAssignmentForm = reactive<Record<TaskType, { apiConfigId: string; model: string }>>({
+  roleplay: { apiConfigId: '', model: '' },
+  context_compression: { apiConfigId: '', model: '' },
+  memory_fragmentation: { apiConfigId: '', model: '' },
+  vision: { apiConfigId: '', model: '' },
+  code_generation: { apiConfigId: '', model: '' },
+  premier: { apiConfigId: '', model: '' },
+})
+
+function syncModelAssignmentsFromConfig() {
+  const assignments = configStore.config.modelAssignments
+  if (!assignments) return
+  for (const key of Object.keys(modelAssignmentForm) as TaskType[]) {
+    if (assignments[key]) {
+      modelAssignmentForm[key].apiConfigId = assignments[key].apiConfigId || ''
+      modelAssignmentForm[key].model = assignments[key].model || ''
+    }
+  }
+}
+
+async function saveModelAssignments() {
+  const next = { ...modelAssignmentForm }
+  await configStore.setConfig('modelAssignments', next)
+}
 
 function openApiDialogForCreate() {
   editingApi.value = false
@@ -522,39 +460,6 @@ async function saveChar() {
   showCharDialog.value = false
 }
 
-const showRouteDialog = ref(false)
-const editingRoute = ref(false)
-const routeForm = reactive<ModelRouteRule>({
-  id: '',
-  name: '',
-  taskTypes: [] as TaskType[],
-  apiConfigId: '',
-  model: '',
-  priority: 10,
-})
-
-function openRouteDialogForCreate() {
-  editingRoute.value = false
-  Object.assign(routeForm, { id: '', name: '', taskTypes: [], apiConfigId: '', model: '', priority: 10 })
-  showRouteDialog.value = true
-}
-
-function openRouteDialogForEdit(route: ModelRouteRule) {
-  editingRoute.value = true
-  Object.assign(routeForm, { ...route, taskTypes: [...route.taskTypes] })
-  showRouteDialog.value = true
-}
-
-async function saveRoute() {
-  if (!routeForm.name || !routeForm.apiConfigId || !routeForm.model) return
-  if (editingRoute.value) {
-    await configStore.updateModelRoute({ ...routeForm, taskTypes: [...routeForm.taskTypes] })
-  } else {
-    await configStore.addModelRoute({ ...routeForm, id: uuidv4(), taskTypes: [...routeForm.taskTypes] })
-  }
-  showRouteDialog.value = false
-}
-
 const watchFolderRows = computed(() => configStore.config.watchFolders.map((path) => ({ path })))
 
 async function addWatchFolder() {
@@ -570,7 +475,6 @@ async function removeWatchFolder(index: number) {
 
 async function selectLive2DModel() {
   const file = await window.electronAPI.dialog.selectFile([{ name: 'Live2D Model', extensions: ['model3.json', 'json'] }])
-  // Electron 这里的 dialog 返回的是绝对路径
   if (file) {
     configStore.config.live2dModelPath = file
   }
@@ -583,7 +487,6 @@ async function saveLive2DConfig() {
 
 const expressionRows = ref<MappingRow[]>([])
 const motionRows = ref<MappingRow[]>([])
-const taskClassifierRows = ref<TaskClassifierRule[]>([])
 
 function mapToRows(mapObj: Record<string, string>): MappingRow[] {
   return Object.entries(mapObj).map(([alias, target]) => ({ alias, target }))
@@ -637,33 +540,7 @@ async function saveTriggerPrompts() {
 }
 
 async function saveAgentChainConfig() {
-  configStore.config.agentChain.taskClassifierRules = taskClassifierRows.value
-    .filter((row) => row.pattern.trim())
-    .map((row) => ({
-      ...row,
-      name: row.name.trim() || `规则-${row.taskType}`,
-      pattern: row.pattern.trim(),
-    }))
   await configStore.setConfig('agentChain', { ...configStore.config.agentChain })
-}
-
-function addTaskRule() {
-  taskClassifierRows.value.push({
-    id: uuidv4(),
-    name: '',
-    pattern: '',
-    taskType: 'chat',
-    enabled: true,
-    priority: 10,
-  })
-}
-
-function removeTaskRule(index: number) {
-  taskClassifierRows.value.splice(index, 1)
-}
-
-function syncTaskRulesFromConfig() {
-  taskClassifierRows.value = (configStore.config.agentChain.taskClassifierRules || []).map((rule) => ({ ...rule }))
 }
 
 const toolList = ref<ToolDefinition[]>([])
@@ -755,14 +632,14 @@ async function mergeMemoryGroup(ids: string[]) {
   await loadMemories()
 }
 
-function backToHome() {
-  router.push('/live2d')
+function hideSettings() {
+  window.electronAPI.window.close()
 }
 
 onMounted(async () => {
   await configStore.loadConfig()
   syncActionMapRowsFromConfig()
-  syncTaskRulesFromConfig()
+  syncModelAssignmentsFromConfig()
   syncSearchConfigInputs()
   await loadTools()
   await loadMemories()

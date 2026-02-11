@@ -2,7 +2,14 @@ import { AppConfig } from './types'
 
 export const DEFAULT_CONFIG: AppConfig = {
   apiConfigs: [],
-  modelRoutes: [],
+  modelAssignments: {
+    roleplay: { apiConfigId: '', model: '' },
+    context_compression: { apiConfigId: '', model: '' },
+    memory_fragmentation: { apiConfigId: '', model: '' },
+    vision: { apiConfigId: '', model: '' },
+    code_generation: { apiConfigId: '', model: '' },
+    premier: { apiConfigId: '', model: '' },
+  },
   characters: [
     {
       id: 'default',
@@ -35,57 +42,6 @@ export const DEFAULT_CONFIG: AppConfig = {
     blockDomains: [],
   },
   agentChain: {
-    enableAutoTaskRouting: true,
-    taskClassifierRules: [
-      {
-        id: 'task-rule-vision',
-        name: '视觉任务',
-        pattern: '![.*]\\(.*\\)|https?:\\/\\/\\S+\\.(png|jpg|jpeg|webp|gif)|data:image\\/[a-z+]+;base64,|识别图片|图里|看图|图像|ocr|image',
-        taskType: 'vision',
-        enabled: true,
-        priority: 1,
-      },
-      {
-        id: 'task-rule-translation',
-        name: '翻译任务',
-        pattern: '翻译|translate|译为',
-        taskType: 'translation',
-        enabled: true,
-        priority: 2,
-      },
-      {
-        id: 'task-rule-summary',
-        name: '总结任务',
-        pattern: '总结|摘要|归纳|总结一下',
-        taskType: 'summary',
-        enabled: true,
-        priority: 3,
-      },
-      {
-        id: 'task-rule-file',
-        name: '文件操作',
-        pattern: '读取文件|写入文件|文件夹|目录|path|\\.txt|\\.md|\\.json',
-        taskType: 'file_operation',
-        enabled: true,
-        priority: 4,
-      },
-      {
-        id: 'task-rule-roleplay',
-        name: '角色扮演',
-        pattern: '扮演|角色扮演|你现在是|请你饰演',
-        taskType: 'roleplay',
-        enabled: true,
-        priority: 5,
-      },
-      {
-        id: 'task-rule-tool',
-        name: '工具调用',
-        pattern: '调用工具|使用工具|tool',
-        taskType: 'tool_call',
-        enabled: true,
-        priority: 6,
-      },
-    ],
     enableContextCompression: true,
     compressionThresholdTokens: 3200,
     compressionKeepRecentMessages: 12,
@@ -96,8 +52,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     memoryMaxItems: 500,
   },
   window: {
-    chatWidth: 350,
-    chatHeight: 500,
+    chatWidth: 320,
+    chatHeight: 420,
     live2dWidth: 300,
     live2dHeight: 400,
   },

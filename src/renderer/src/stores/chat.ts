@@ -225,6 +225,13 @@ export const useChatStore = defineStore('chat', () => {
 
     if (prompt) {
       await sendMessage(prompt)
+      // If triggered by non-dialog means and Live2D has a model, show reply below avatar
+      if (context.trigger !== 'text_input' && config.live2dModelPath) {
+        const lastAssistant = [...messages.value].reverse().find((m) => m.role === 'assistant')
+        if (lastAssistant?.content) {
+          window.electronAPI.live2d.showReply(lastAssistant.content)
+        }
+      }
     }
   }
 

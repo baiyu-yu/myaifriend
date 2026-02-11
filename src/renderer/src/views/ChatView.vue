@@ -159,6 +159,89 @@ function backToHome() {
 </script>
 
 <style scoped>
+.chat-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: #f5f7fa;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.chat-message {
+  margin-bottom: 12px;
+  display: flex;
+}
+
+.chat-message.user {
+  justify-content: flex-end;
+}
+
+.chat-message.assistant,
+.chat-message.tool {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.chat-message.user .bubble {
+  background-color: #409eff;
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.chat-message.assistant .bubble {
+  background-color: #fff;
+  color: #303133;
+  border: 1px solid #ebeef5;
+  border-bottom-left-radius: 4px;
+}
+
+.chat-message.tool .bubble {
+  background-color: #fafafa;
+  color: #606266;
+  border: 1px solid #ebeef5;
+  border-bottom-left-radius: 4px;
+}
+
+.chat-input-area {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #ebeef5;
+  background-color: #fff;
+}
+
+.chat-input-area textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 14px;
+  transition: border-color 0.2s;
+  outline: none;
+}
+
+.chat-input-area textarea:focus {
+  border-color: #409eff;
+}
+
 .toolbar {
   display: flex;
   flex-direction: column;

@@ -1,8 +1,12 @@
 <template>
   <div class="live2d-container" @click="handleClick">
     <canvas ref="canvasRef" />
-    <div v-if="statusText" class="status">{{ statusText }}</div>
+    <div v-if="statusText && hasModel" class="status">{{ statusText }}</div>
     <div v-if="errorText" class="error">{{ errorText }}</div>
+
+    <div v-if="replyText" class="reply-bubble" @click.stop>
+      <div class="reply-content">{{ replyText }}</div>
+    </div>
 
     <div class="app-icon-menu">
       <el-dropdown trigger="click" @command="handleCommand">
@@ -35,12 +39,15 @@ import { useConfigStore } from '../stores/config'
 const canvasRef = ref<HTMLCanvasElement>()
 const statusText = ref('')
 const errorText = ref('')
+const replyText = ref('')
+const hasModel = ref(false)
 
 const configStore = useConfigStore()
 const cleanups: Array<() => void> = []
 
 let pixiApp: Application | null = null
 let currentModel: Live2DModel | null = null
+let replyTimer: ReturnType<typeof setTimeout> | null = null
 
 function handleCommand(command: string) {
   if (command === 'chat') {
@@ -103,10 +110,12 @@ async function loadModel(modelPath: string) {
     currentModel = model
     pixiApp.stage.addChild(model as any)
     fitModel(model)
-    statusText.value = '模型加载成功'
+    hasModel.value = true
+    statusText.value = ''
   } catch (error) {
     errorText.value = `模型加载失败: ${error instanceof Error ? error.message : String(error)}`
     statusText.value = ''
+    hasModel.value = false
   }
 }
 
@@ -144,6 +153,14 @@ async function performAction(action: Live2DAction) {
   }
 }
 
+function showReply(text: string) {
+  if (replyTimer) clearTimeout(replyTimer)
+  replyText.value = text
+  replyTimer = setTimeout(() => {
+    replyText.value = ''
+  }, 10000)
+}
+
 function handleResize() {
   if (!pixiApp || !currentModel) return
   pixiApp.renderer.resize(window.innerWidth, window.innerHeight)
@@ -151,7 +168,6 @@ function handleResize() {
 }
 
 function handleClick(event: MouseEvent) {
-  // window.electronAPI.window.toggleChat() // Removed toggle on click, now handled by menu
   window.electronAPI.trigger.invoke({ trigger: 'click_avatar' })
   if (currentModel) {
     currentModel.tap(event.clientX, event.clientY)
@@ -172,8 +188,6 @@ onMounted(async () => {
   await configStore.loadConfig()
   if (configStore.config.live2dModelPath) {
     await loadModel(configStore.config.live2dModelPath)
-  } else {
-    statusText.value = '请先在设置页面选择 .model3.json 模型文件'
   }
 
   const offAction = window.electronAPI.live2d.onAction((action: Live2DAction) => {
@@ -182,7 +196,10 @@ onMounted(async () => {
   const offLoadModel = window.electronAPI.live2d.onLoadModel((modelPath: string) => {
     loadModel(modelPath)
   })
-  cleanups.push(offAction, offLoadModel)
+  const offShowReply = window.electronAPI.live2d.onShowReply((text: string) => {
+    showReply(text)
+  })
+  cleanups.push(offAction, offLoadModel, offShowReply)
 
   window.addEventListener('resize', handleResize)
   cleanups.push(() => window.removeEventListener('resize', handleResize))
@@ -201,6 +218,8 @@ onBeforeUnmount(() => {
     pixiApp.destroy(true)
     pixiApp = null
   }
+
+  if (replyTimer) clearTimeout(replyTimer)
 })
 </script>
 
@@ -242,6 +261,41 @@ canvas {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.reply-bubble {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 90%;
+  z-index: 100;
+  animation: fadeIn 0.3s ease;
+}
+
+.reply-content {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #e4e7ed;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #303133;
+  line-height: 1.5;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  max-height: 120px;
+  overflow-y: auto;
+  word-break: break-word;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
 .app-icon-menu {

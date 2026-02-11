@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { AppConfig, ApiConfig, CharacterConfig, ModelRouteRule } from '../../../common/types'
+import type { AppConfig, ApiConfig, CharacterConfig, TaskType } from '../../../common/types'
 import { DEFAULT_CONFIG } from '../../../common/defaults'
 
 export const useConfigStore = defineStore('config', () => {
@@ -77,26 +77,10 @@ export const useConfigStore = defineStore('config', () => {
     await setConfig('activeCharacterId', id)
   }
 
-  // --- Model Routes ---
-  const modelRoutes = computed(() => config.value.modelRoutes)
-
-  async function addModelRoute(route: ModelRouteRule) {
-    const newList = [...config.value.modelRoutes, route]
-    await setConfig('modelRoutes', newList)
-  }
-
-  async function updateModelRoute(route: ModelRouteRule) {
-    const idx = config.value.modelRoutes.findIndex((r) => r.id === route.id)
-    if (idx >= 0) {
-      const newList = [...config.value.modelRoutes]
-      newList[idx] = route
-      await setConfig('modelRoutes', newList)
-    }
-  }
-
-  async function removeModelRoute(id: string) {
-    const newList = config.value.modelRoutes.filter((r) => r.id !== id)
-    await setConfig('modelRoutes', newList)
+  // --- Model Assignments ---
+  async function setModelAssignment(taskType: TaskType, apiConfigId: string, model: string) {
+    const next = { ...config.value.modelAssignments, [taskType]: { apiConfigId, model } }
+    await setConfig('modelAssignments', next)
   }
 
   return {
@@ -114,9 +98,6 @@ export const useConfigStore = defineStore('config', () => {
     updateCharacter,
     removeCharacter,
     setActiveCharacter,
-    modelRoutes,
-    addModelRoute,
-    updateModelRoute,
-    removeModelRoute,
+    setModelAssignment,
   }
 })
