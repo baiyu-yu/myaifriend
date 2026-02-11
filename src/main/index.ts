@@ -86,7 +86,7 @@ class Application {
     if (process.env.NODE_ENV === 'development') {
       this.mainWindow.loadURL('http://localhost:5173')
     } else {
-      this.mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
+      this.mainWindow.loadFile(path.join(__dirname, '../../renderer/index.html'))
     }
 
     this.mainWindow.on('close', (e) => {
@@ -116,7 +116,7 @@ class Application {
     if (process.env.NODE_ENV === 'development') {
       this.chatWindow.loadURL('http://localhost:5173/#/chat')
     } else {
-      this.chatWindow.loadFile(path.join(__dirname, '../renderer/index.html'), { hash: 'chat' })
+      this.chatWindow.loadFile(path.join(__dirname, '../../renderer/index.html'), { hash: 'chat' })
     }
   }
 
@@ -145,7 +145,7 @@ class Application {
     if (process.env.NODE_ENV === 'development') {
       this.live2dWindow.loadURL('http://localhost:5173/#/live2d')
     } else {
-      this.live2dWindow.loadFile(path.join(__dirname, '../renderer/index.html'), { hash: 'live2d' })
+      this.live2dWindow.loadFile(path.join(__dirname, '../../renderer/index.html'), { hash: 'live2d' })
     }
   }
 
