@@ -3,10 +3,10 @@
     <div class="title-bar">
       <span>{{ characterName }}</span>
       <div class="controls">
-        <button @click="createConversation" title="新建会话">新建</button>
-        <button @click="clearChat" title="清空当前会话">清空</button>
-        <button @click="minimize" title="最小化">-</button>
-        <button @click="close" title="关闭">X</button>
+        <button type="button" @click="createConversation" title="新建会话">新建</button>
+        <button type="button" @click="clearChat" title="清空当前会话">清空</button>
+        <button type="button" @click="minimize" title="最小化">-</button>
+        <button type="button" @click="close" title="关闭">X</button>
       </div>
     </div>
 
@@ -16,17 +16,20 @@
           {{ item.title }}
         </option>
       </select>
-      <button class="danger" @click="deleteConversation">删除</button>
+      <button type="button" class="danger" @click="deleteConversation" :disabled="!chatStore.activeConversationId">删除</button>
     </div>
 
     <div class="conversation-bar">
       <input v-model="conversationTitle" placeholder="输入会话标题" />
-      <button @click="renameConversation">重命名</button>
+      <button type="button" @click="renameConversation" :disabled="!conversationTitle.trim()">重命名</button>
     </div>
 
     <div class="chat-messages" ref="messagesContainer">
       <div v-for="msg in visibleMessages" :key="msg.id" class="chat-message" :class="msg.role">
         <div class="bubble">
+          <div v-if="msg.role === 'assistant' && msg.inference?.model" class="model-tag">
+            本次推理模型：{{ msg.inference.model }}（{{ msg.inference.taskType }}）
+          </div>
           <div v-if="msg.role === 'tool'" class="tool-result">
             <span class="tool-label">工具结果</span>
             <pre>{{ msg.content }}</pre>
@@ -50,7 +53,7 @@
         placeholder="输入消息...（Enter 发送，Shift+Enter 换行）"
         rows="1"
       />
-      <button @click="handleSend()" :disabled="chatStore.isLoading || !chatStore.currentInput.trim()">
+      <button type="button" @click="handleSend()" :disabled="chatStore.isLoading || !chatStore.currentInput.trim()">
         发送
       </button>
     </div>
@@ -158,8 +161,25 @@ function clearChat() {
   border-radius: 4px;
 }
 
+.conversation-bar button:disabled,
+.danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .tool-result {
   font-size: 12px;
+}
+
+.model-tag {
+  font-size: 11px;
+  color: #5f6368;
+  background: rgba(64, 158, 255, 0.12);
+  border: 1px solid rgba(64, 158, 255, 0.25);
+  border-radius: 10px;
+  padding: 2px 8px;
+  margin-bottom: 6px;
+  display: inline-block;
 }
 
 .tool-result .tool-label {

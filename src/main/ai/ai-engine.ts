@@ -1,5 +1,5 @@
 import { ConfigManager } from '../config-manager'
-import { ApiConfig, ChatMessage, TaskType, ToolDefinition } from '../../common/types'
+import { ApiConfig, ChatMessage, TaskClassifierRule, TaskType, ToolDefinition } from '../../common/types'
 import { MemoryManager } from './memory-manager'
 
 interface ChatCompletionMessage {
@@ -31,6 +31,10 @@ interface ChatCompletionResponse {
     message: ChatCompletionMessage
     finish_reason: string
   }>
+  meta?: {
+    model: string
+    taskType: TaskType
+  }
 }
 
 type PreparedContext = {
@@ -38,7 +42,7 @@ type PreparedContext = {
   messages: ChatMessage[]
 }
 
-function estimateTokens(messages: ChatMessage[]): number {
+export function estimateTokens(messages: ChatMessage[]): number {
   const chars = messages.reduce((sum, m) => sum + m.content.length, 0)
   return Math.ceil(chars / 4)
 }
@@ -50,7 +54,7 @@ function getLastUserMessage(messages: ChatMessage[]): ChatMessage | undefined {
   return undefined
 }
 
-function inferTaskTypeByText(text: string): TaskType {
+export function inferTaskTypeByText(text: string): TaskType {
   const normalized = text.toLowerCase()
 
   const hasImageSignal =
@@ -67,6 +71,40 @@ function inferTaskTypeByText(text: string): TaskType {
   if (/(调用工具|使用工具|tool)/i.test(text)) return 'tool_call'
 
   return normalized.length > 0 ? 'chat' : 'chat'
+}
+
+export function inferTaskTypeByRules(text: string, rules: TaskClassifierRule[]): TaskType | null {
+  const sortedRules = [...rules]
+    .filter((rule) => rule.enabled && rule.pattern.trim())
+    .sort((a, b) => a.priority - b.priority)
+
+  for (const rule of sortedRules) {
+    try {
+      const re = new RegExp(rule.pattern, 'i')
+      if (re.test(text)) return rule.taskType
+    } catch {
+      // Ignore invalid user regex and continue with next rule.
+    }
+  }
+  return null
+}
+
+export function shouldCompressContext(messages: ChatMessage[], thresholdTokens: number): boolean {
+  return estimateTokens(messages) > thresholdTokens
+}
+
+export function injectMemorySystemPrompt(messages: ChatMessage[], memories: Array<{ text: string }>): ChatMessage[] {
+  if (!memories.length) return messages
+  const memoryPrompt = memories.map((item, index) => `${index + 1}. ${item.text}`).join('\n')
+  return [
+    {
+      id: `memory-${Date.now()}`,
+      role: 'system',
+      content: `以下是与用户相关的长期记忆，请在回答时优先遵循：\n${memoryPrompt}`,
+      timestamp: Date.now(),
+    },
+    ...messages,
+  ]
 }
 
 function pickMemoryCandidates(text: string): string[] {
@@ -95,8 +133,9 @@ export class AIEngine {
   ): Promise<ChatCompletionResponse> {
     const allConfig = this.configManager.getAll()
     const chain = allConfig.agentChain
+    const latestUserText = getLastUserMessage(messages)?.content || ''
     const inferredTask = chain.enableAutoTaskRouting
-      ? inferTaskTypeByText(getLastUserMessage(messages)?.content || '')
+      ? inferTaskTypeByRules(latestUserText, chain.taskClassifierRules) || inferTaskTypeByText(latestUserText)
       : taskType
 
     const prepared = await this.prepareContext(messages, inferredTask)
@@ -115,6 +154,10 @@ export class AIEngine {
 
     const assistantContent = response.choices?.[0]?.message?.content || ''
     this.rememberIfNeeded(prepared.messages, assistantContent)
+    response.meta = {
+      model: modelName,
+      taskType: prepared.taskType,
+    }
     return response
   }
 
@@ -124,24 +167,17 @@ export class AIEngine {
 
     if (allConfig.agentChain.enableMemory) {
       const latest = getLastUserMessage(working)?.content || ''
-      const memories = this.memoryManager.retrieve(latest, allConfig.agentChain.memoryTopK)
-      if (memories.length > 0) {
-        const memoryPrompt = memories.map((item, index) => `${index + 1}. ${item.text}`).join('\n')
-        working = [
-          {
-            id: `memory-${Date.now()}`,
-            role: 'system',
-            content: `以下是与用户相关的长期记忆，请在回答时优先遵循：\n${memoryPrompt}`,
-            timestamp: Date.now(),
-          },
-          ...working,
-        ]
-      }
+      const memories = this.memoryManager.retrieve(
+        latest,
+        allConfig.agentChain.memoryTopK,
+        allConfig.agentChain.memoryMinScore,
+        allConfig.agentChain.memoryDeduplicate
+      )
+      working = injectMemorySystemPrompt(working, memories)
     }
 
     if (allConfig.agentChain.enableContextCompression) {
-      const tokenCount = estimateTokens(working)
-      if (tokenCount > allConfig.agentChain.compressionThresholdTokens) {
+      if (shouldCompressContext(working, allConfig.agentChain.compressionThresholdTokens)) {
         working = await this.compressContext(working, allConfig.agentChain.compressionKeepRecentMessages)
       }
     }

@@ -28,6 +28,15 @@ export interface ModelRouteRule {
   priority: number
 }
 
+export interface TaskClassifierRule {
+  id: string
+  name: string
+  pattern: string
+  taskType: TaskType
+  enabled: boolean
+  priority: number
+}
+
 // --- Character ---
 export interface CharacterConfig {
   id: string
@@ -46,6 +55,10 @@ export interface ChatMessage {
   timestamp: number
   toolCalls?: ToolCall[]
   toolCallId?: string
+  inference?: {
+    model: string
+    taskType: TaskType
+  }
 }
 
 export interface Conversation {
@@ -136,13 +149,20 @@ export interface AppConfig {
   triggerPrompts: Record<InvokeTrigger, string>
   live2dModelPath: string
   live2dActionMap: Live2DActionMap
+  webSearch: {
+    allowDomains: string[]
+    blockDomains: string[]
+  }
   agentChain: {
     enableAutoTaskRouting: boolean
+    taskClassifierRules: TaskClassifierRule[]
     enableContextCompression: boolean
     compressionThresholdTokens: number
     compressionKeepRecentMessages: number
     enableMemory: boolean
     memoryTopK: number
+    memoryMinScore: number
+    memoryDeduplicate: boolean
     memoryMaxItems: number
   }
   window: {
@@ -169,6 +189,12 @@ export const IPC_CHANNELS = {
   CHAT_HISTORY_CREATE: 'chat:history:create',
   CHAT_HISTORY_SAVE: 'chat:history:save',
   CHAT_HISTORY_DELETE: 'chat:history:delete',
+
+  // Memory
+  MEMORY_LIST: 'memory:list',
+  MEMORY_DELETE: 'memory:delete',
+  MEMORY_CLEAR: 'memory:clear',
+  MEMORY_MERGE: 'memory:merge',
 
   // Tool
   TOOL_EXECUTE: 'tool:execute',

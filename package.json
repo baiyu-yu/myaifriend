@@ -17,7 +17,10 @@
     "pack": "npm run pack:portable",
     "pack:portable": "npm run build && electron-builder --win portable --x64",
     "pack:installer": "npm run build && electron-builder --win nsis --x64",
-    "test": "echo \"No tests yet\""
+    "test:clean": "node -e \"require('fs').rmSync('.test-dist',{recursive:true,force:true})\"",
+    "test:build": "npm run test:clean && tsc -p tsconfig.test.json",
+    "test:run": "node --test .test-dist/tests/e2e/*.test.js .test-dist/tests/main/*.test.js",
+    "test": "npm run build:main && npm run test:build && npm run test:run"
   },
   "build": {
     "appId": "com.dice.aibot",
@@ -27,6 +30,7 @@
     },
     "files": [
       "dist/**/*",
+      "build/icon.png",
       "node_modules/**/*",
       "package.json"
     ],

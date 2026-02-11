@@ -27,6 +27,13 @@ const electronAPI = {
     historyDelete: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CHAT_HISTORY_DELETE, id),
   },
 
+  memory: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.MEMORY_LIST),
+    delete: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.MEMORY_DELETE, id),
+    clear: () => ipcRenderer.invoke(IPC_CHANNELS.MEMORY_CLEAR),
+    merge: (ids: string[]) => ipcRenderer.invoke(IPC_CHANNELS.MEMORY_MERGE, ids),
+  },
+
   tools: {
     execute: (name: string, args: Record<string, unknown>) =>
       ipcRenderer.invoke(IPC_CHANNELS.TOOL_EXECUTE, name, args),

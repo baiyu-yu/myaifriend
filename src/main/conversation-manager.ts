@@ -1,4 +1,5 @@
 import Store from 'electron-store'
+import path from 'path'
 import { Conversation, ConversationSummary } from '../common/types'
 
 type ConversationStoreShape = {
@@ -9,8 +10,16 @@ export class ConversationManager {
   private store: any
 
   constructor() {
+    const fallbackOptions =
+      process.versions.electron
+        ? {}
+        : {
+            cwd: path.join(process.cwd(), '.aibot-test-store'),
+            projectVersion: '0.0.0',
+          }
     this.store = new Store<ConversationStoreShape>({
       name: 'aibot-conversations',
+      ...fallbackOptions,
       defaults: {
         conversations: [],
       },

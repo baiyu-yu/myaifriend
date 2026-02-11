@@ -147,6 +147,7 @@ export const useChatStore = defineStore('chat', () => {
 
       const response = await window.electronAPI.chat.send(apiMessages)
       const choice = response.choices?.[0]
+      const inference = response.meta
 
       if (choice?.message) {
         const assistantMsg: ChatMessage = {
@@ -154,6 +155,7 @@ export const useChatStore = defineStore('chat', () => {
           role: 'assistant',
           content: choice.message.content || '',
           timestamp: Date.now(),
+          ...(inference ? { inference } : {}),
         }
 
         if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
@@ -190,6 +192,7 @@ export const useChatStore = defineStore('chat', () => {
               role: 'assistant',
               content: followUpChoice.message.content,
               timestamp: Date.now(),
+              ...(followUp.meta ? { inference: followUp.meta } : {}),
             })
           }
         } else {

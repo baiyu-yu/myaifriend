@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "outDir": ".test-dist",
+    "types": ["node"],
+    "declaration": false
+  },
+  "include": [
+    "src/main/**/*.ts",
+    "src/preload/**/*.ts",
+    "src/common/**/*.ts",
+    "src/renderer/src/**/*.ts",
+    "src/renderer/src/**/*.d.ts",
+    "tests/**/*.ts"
+  ]
+}

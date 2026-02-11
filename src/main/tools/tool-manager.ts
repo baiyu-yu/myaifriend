@@ -1,12 +1,13 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { pathToFileURL } from 'url'
-import { ToolDefinition, ToolResult } from '../../common/types'
+import { AppConfig, ToolDefinition, ToolResult } from '../../common/types'
 import { FileReadTool } from './builtin/file-read'
 import { FileWriteTool } from './builtin/file-write'
 import { FileListTool } from './builtin/file-list'
 import { OpenBrowserTool } from './builtin/open-browser'
 import { Live2DControlTool } from './builtin/live2d-control'
+import { WebSearchTool } from './builtin/web-search'
 
 export interface ITool {
   definition: ToolDefinition
@@ -15,6 +16,11 @@ export interface ITool {
 
 export class ToolManager {
   private tools: Map<string, ITool> = new Map()
+  private getConfig?: () => AppConfig
+
+  constructor(getConfig?: () => AppConfig) {
+    this.getConfig = getConfig
+  }
 
   register(tool: ITool): void {
     this.tools.set(tool.definition.name, tool)
@@ -30,6 +36,7 @@ export class ToolManager {
     this.register(new FileListTool())
     this.register(new OpenBrowserTool())
     this.register(new Live2DControlTool())
+    this.register(new WebSearchTool(this.getConfig))
   }
 
   /**

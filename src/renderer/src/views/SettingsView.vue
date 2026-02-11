@@ -65,6 +65,55 @@
           <el-form-item label="启用自动任务路由">
             <el-switch v-model="configStore.config.agentChain.enableAutoTaskRouting" />
           </el-form-item>
+          <el-form-item label="任务分类规则（正则）">
+            <div style="width: 100%">
+              <div class="mapping-header" style="margin-bottom: 8px">
+                <span>按优先级从小到大匹配，命中即采用该任务类型</span>
+                <el-button size="small" type="primary" @click="addTaskRule">新增规则</el-button>
+              </div>
+              <el-table :data="taskClassifierRows" border stripe>
+                <el-table-column label="启用" width="80">
+                  <template #default="{ row }">
+                    <el-switch v-model="row.enabled" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="名称" width="140">
+                  <template #default="{ row }">
+                    <el-input v-model="row.name" placeholder="规则名" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="任务类型" width="140">
+                  <template #default="{ row }">
+                    <el-select v-model="row.taskType">
+                      <el-option label="chat" value="chat" />
+                      <el-option label="roleplay" value="roleplay" />
+                      <el-option label="tool_call" value="tool_call" />
+                      <el-option label="file_operation" value="file_operation" />
+                      <el-option label="summary" value="summary" />
+                      <el-option label="translation" value="translation" />
+                      <el-option label="vision" value="vision" />
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="优先级" width="120">
+                  <template #default="{ row }">
+                    <el-input-number v-model="row.priority" :min="1" :max="9999" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="匹配正则">
+                  <template #default="{ row }">
+                    <el-input v-model="row.pattern" placeholder="例如：翻译|translate|译为" />
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="90">
+                  <template #default="{ $index }">
+                    <el-button size="small" type="danger" @click="removeTaskRule($index)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-text type="info">注意：这是 JavaScript 正则，错误规则会被自动忽略。</el-text>
+            </div>
+          </el-form-item>
           <el-form-item label="启用上下文压缩">
             <el-switch v-model="configStore.config.agentChain.enableContextCompression" />
           </el-form-item>
@@ -79,6 +128,18 @@
           </el-form-item>
           <el-form-item label="每次注入记忆条数">
             <el-input-number v-model="configStore.config.agentChain.memoryTopK" :min="1" :max="20" />
+          </el-form-item>
+          <el-form-item label="记忆相似度阈值">
+            <el-input-number
+              v-model="configStore.config.agentChain.memoryMinScore"
+              :min="0"
+              :max="1"
+              :step="0.01"
+              :precision="2"
+            />
+          </el-form-item>
+          <el-form-item label="记忆去重（按来源）">
+            <el-switch v-model="configStore.config.agentChain.memoryDeduplicate" />
           </el-form-item>
           <el-form-item label="记忆库最大条数">
             <el-input-number v-model="configStore.config.agentChain.memoryMaxItems" :min="50" :max="5000" :step="50" />
@@ -184,7 +245,7 @@
           </el-form-item>
           <el-form-item>
             <el-button type="primary" @click="saveHotkeys">保存</el-button>
-            <el-text type="warning" style="margin-left: 8px">修改后需重启应用</el-text>
+            <el-text type="success" style="margin-left: 8px">保存后立即生效（若系统占用会自动回退）</el-text>
           </el-form-item>
         </el-form>
       </el-tab-pane>
@@ -196,6 +257,67 @@
           <el-table-column label="参数" width="280">
             <template #default="{ row }">
               <el-tag v-for="(_, key) in row.parameters" :key="key" style="margin-right: 6px">{{ key }}</el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-divider content-position="left">网络搜索过滤规则（web_search）</el-divider>
+        <el-form label-width="140px" style="max-width: 900px">
+          <el-form-item label="白名单域名">
+            <el-input
+              v-model="searchAllowDomainsInput"
+              type="textarea"
+              :rows="3"
+              placeholder="每行一个域名，例如：wikipedia.org"
+            />
+          </el-form-item>
+          <el-form-item label="黑名单域名">
+            <el-input
+              v-model="searchBlockDomainsInput"
+              type="textarea"
+              :rows="3"
+              placeholder="每行一个域名，例如：example.com"
+            />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="saveWebSearchConfig">保存搜索规则</el-button>
+          </el-form-item>
+        </el-form>
+      </el-tab-pane>
+
+      <el-tab-pane label="记忆管理" name="memory">
+        <div class="mapping-header" style="margin-bottom: 8px">
+          <el-button type="primary" @click="loadMemories">刷新</el-button>
+          <el-button type="danger" plain @click="clearMemories">清空记忆</el-button>
+        </div>
+        <el-table :data="memoryRows" border stripe v-loading="memoriesLoading">
+          <el-table-column prop="text" label="内容" />
+          <el-table-column prop="hits" label="命中次数" width="100" />
+          <el-table-column label="更新时间" width="180">
+            <template #default="{ row }">
+              {{ formatTime(row.updatedAt) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="100">
+            <template #default="{ row }">
+              <el-button size="small" type="danger" @click="deleteMemory(row.id)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <el-divider content-position="left">碎片聚类（按来源）</el-divider>
+        <el-table :data="memoryGroups" border stripe>
+          <el-table-column prop="sourceId" label="来源ID" width="220" />
+          <el-table-column prop="count" label="碎片数" width="90" />
+          <el-table-column label="示例内容">
+            <template #default="{ row }">
+              {{ row.preview }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="160">
+            <template #default="{ row }">
+              <el-button size="small" type="primary" :disabled="row.count < 2" @click="mergeMemoryGroup(row.ids)">
+                合并碎片
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -307,9 +429,18 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import { useConfigStore } from '../stores/config'
-import type { ApiConfig, CharacterConfig, ModelRouteRule, TaskType, ToolDefinition } from '../../../common/types'
+import type {
+  ApiConfig,
+  CharacterConfig,
+  ModelRouteRule,
+  TaskClassifierRule,
+  TaskType,
+  ToolDefinition,
+} from '../../../common/types'
 
 type MappingRow = { alias: string; target: string }
+type MemoryRow = { id: string; sourceId: string; text: string; createdAt: number; updatedAt: number; hits: number }
+type MemoryGroupRow = { sourceId: string; count: number; preview: string; ids: string[] }
 
 const configStore = useConfigStore()
 const activeTab = ref('api')
@@ -443,6 +574,7 @@ async function saveLive2DConfig() {
 
 const expressionRows = ref<MappingRow[]>([])
 const motionRows = ref<MappingRow[]>([])
+const taskClassifierRows = ref<TaskClassifierRule[]>([])
 
 function mapToRows(mapObj: Record<string, string>): MappingRow[] {
   return Object.entries(mapObj).map(([alias, target]) => ({ alias, target }))
@@ -496,11 +628,60 @@ async function saveTriggerPrompts() {
 }
 
 async function saveAgentChainConfig() {
+  configStore.config.agentChain.taskClassifierRules = taskClassifierRows.value
+    .filter((row) => row.pattern.trim())
+    .map((row) => ({
+      ...row,
+      name: row.name.trim() || `规则-${row.taskType}`,
+      pattern: row.pattern.trim(),
+    }))
   await configStore.setConfig('agentChain', { ...configStore.config.agentChain })
+}
+
+function addTaskRule() {
+  taskClassifierRows.value.push({
+    id: uuidv4(),
+    name: '',
+    pattern: '',
+    taskType: 'chat',
+    enabled: true,
+    priority: 10,
+  })
+}
+
+function removeTaskRule(index: number) {
+  taskClassifierRows.value.splice(index, 1)
+}
+
+function syncTaskRulesFromConfig() {
+  taskClassifierRows.value = (configStore.config.agentChain.taskClassifierRules || []).map((rule) => ({ ...rule }))
 }
 
 const toolList = ref<ToolDefinition[]>([])
 const toolsLoading = ref(false)
+const memoryRows = ref<MemoryRow[]>([])
+const memoriesLoading = ref(false)
+const searchAllowDomainsInput = ref('')
+const searchBlockDomainsInput = ref('')
+
+const memoryGroups = computed<MemoryGroupRow[]>(() => {
+  const groupMap = new Map<string, MemoryGroupRow>()
+  for (const item of memoryRows.value) {
+    const sourceId = item.sourceId || item.id
+    if (!groupMap.has(sourceId)) {
+      groupMap.set(sourceId, {
+        sourceId,
+        count: 0,
+        preview: item.text.slice(0, 80),
+        ids: [],
+      })
+    }
+    const group = groupMap.get(sourceId)!
+    group.count += 1
+    group.ids.push(item.id)
+  }
+  return Array.from(groupMap.values()).sort((a, b) => b.count - a.count)
+})
 
 async function loadTools() {
   toolsLoading.value = true
@@ -511,10 +692,67 @@ async function loadTools() {
   }
 }
 
+function parseDomainInput(value: string): string[] {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function syncSearchConfigInputs() {
+  searchAllowDomainsInput.value = (configStore.config.webSearch.allowDomains || []).join('\n')
+  searchBlockDomainsInput.value = (configStore.config.webSearch.blockDomains || []).join('\n')
+}
+
+async function saveWebSearchConfig() {
+  await configStore.setConfig('webSearch', {
+    allowDomains: parseDomainInput(searchAllowDomainsInput.value),
+    blockDomains: parseDomainInput(searchBlockDomainsInput.value),
+  })
+}
+
+function formatTime(ts: number) {
+  const d = new Date(ts)
+  const yy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  return `${yy}-${mm}-${dd} ${hh}:${mi}`
+}
+
+async function loadMemories() {
+  memoriesLoading.value = true
+  try {
+    memoryRows.value = await window.electronAPI.memory.list()
+  } finally {
+    memoriesLoading.value = false
+  }
+}
+
+async function deleteMemory(id: string) {
+  await window.electronAPI.memory.delete(id)
+  await loadMemories()
+}
+
+async function clearMemories() {
+  await window.electronAPI.memory.clear()
+  await loadMemories()
+}
+
+async function mergeMemoryGroup(ids: string[]) {
+  if (!ids || ids.length < 2) return
+  await window.electronAPI.memory.merge(ids)
+  await loadMemories()
+}
+
 onMounted(async () => {
   await configStore.loadConfig()
   syncActionMapRowsFromConfig()
+  syncTaskRulesFromConfig()
+  syncSearchConfigInputs()
   await loadTools()
+  await loadMemories()
 })
 </script>
 

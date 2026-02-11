@@ -10,11 +10,13 @@ import {
   nativeImage,
 } from 'electron'
 import path from 'path'
+import fs from 'fs'
 import { ConfigManager } from './config-manager'
 import { ConversationManager } from './conversation-manager'
 import { ToolManager } from './tools/tool-manager'
 import { FileWatcher } from './file-watcher'
 import { AIEngine } from './ai/ai-engine'
+import { MemoryManager } from './ai/memory-manager'
 import { IPC_CHANNELS, InvokeContext } from '../common/types'
 
 class Application {
@@ -28,17 +30,20 @@ class Application {
   private conversationManager!: ConversationManager
   private fileWatcher!: FileWatcher
   private aiEngine!: AIEngine
+  private memoryManager!: MemoryManager
 
   private randomTimer: NodeJS.Timeout | null = null
   private isQuitting = false
 
   async init() {
     await app.whenReady()
+    app.setAppUserModelId('com.dice.aibot')
 
     this.configManager = new ConfigManager()
     this.conversationManager = new ConversationManager()
-    this.toolManager = new ToolManager()
+    this.toolManager = new ToolManager(() => this.configManager.getAll())
     this.aiEngine = new AIEngine(this.configManager)
+    this.memoryManager = new MemoryManager()
     this.fileWatcher = new FileWatcher()
 
     this.toolManager.registerBuiltinTools()
@@ -82,11 +87,13 @@ class Application {
   }
 
   private createMainWindow() {
+    const icon = this.resolveIconPath()
     this.mainWindow = new BrowserWindow({
       width: 900,
       height: 700,
-      show: false,
+      show: true,
       title: 'AI Bot - 设置',
+      ...(icon ? { icon } : {}),
       webPreferences: {
         preload: path.join(__dirname, '../preload/index.js'),
         contextIsolation: true,
@@ -109,6 +116,7 @@ class Application {
 
   private createChatWindow() {
     const config = this.configManager.getAll()
+    const icon = this.resolveIconPath()
     this.chatWindow = new BrowserWindow({
       width: config.window.chatWidth,
       height: config.window.chatHeight,
@@ -118,6 +126,7 @@ class Application {
       alwaysOnTop: true,
       resizable: true,
       skipTaskbar: true,
+      ...(icon ? { icon } : {}),
       webPreferences: {
         preload: path.join(__dirname, '../preload/index.js'),
         contextIsolation: true,
@@ -134,6 +143,7 @@ class Application {
 
   private createLive2DWindow() {
     const config = this.configManager.getAll()
+    const icon = this.resolveIconPath()
     this.live2dWindow = new BrowserWindow({
       width: config.window.live2dWidth,
       height: config.window.live2dHeight,
@@ -144,6 +154,7 @@ class Application {
       resizable: false,
       skipTaskbar: true,
       hasShadow: false,
+      ...(icon ? { icon } : {}),
       webPreferences: {
         preload: path.join(__dirname, '../preload/index.js'),
         contextIsolation: true,
@@ -169,9 +180,8 @@ class Application {
   }
 
   private createTray() {
-    const iconPath = path.join(process.cwd(), 'build', 'icon.png')
-    const icon = nativeImage.createFromPath(iconPath)
-    this.tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon)
+    const icon = this.resolveNativeIcon()
+    this.tray = new Tray(icon)
     this.tray.setToolTip('AI Bot')
 
     const contextMenu = Menu.buildFromTemplate([
@@ -188,21 +198,44 @@ class Application {
 
   private registerGlobalShortcuts() {
     const config = this.configManager.getAll()
-    globalShortcut.register(config.hotkeys.toggleChat, () => {
+    globalShortcut.unregisterAll()
+
+    const chatHotkey = config.hotkeys.toggleChat || 'CommandOrControl+Shift+A'
+    const live2dHotkey = config.hotkeys.toggleLive2D || 'CommandOrControl+Shift+L'
+
+    const registeredChat = globalShortcut.register(chatHotkey, () => {
       this.toggleChatWindow()
       const ctx: InvokeContext = { trigger: 'hotkey' }
       this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
     })
-    globalShortcut.register(config.hotkeys.toggleLive2D, () => this.toggleLive2DWindow())
+    const registeredLive2D = globalShortcut.register(live2dHotkey, () => this.toggleLive2DWindow())
+
+    if (!registeredChat) {
+      const fallback = 'CommandOrControl+Shift+A'
+      console.warn(`[Hotkey] 注册失败: ${chatHotkey}，回退到 ${fallback}`)
+      globalShortcut.register(fallback, () => {
+        this.toggleChatWindow()
+        const ctx: InvokeContext = { trigger: 'hotkey' }
+        this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
+      })
+    }
+
+    if (!registeredLive2D) {
+      const fallback = 'CommandOrControl+Shift+L'
+      console.warn(`[Hotkey] 注册失败: ${live2dHotkey}，回退到 ${fallback}`)
+      globalShortcut.register(fallback, () => this.toggleLive2DWindow())
+    }
   }
 
   private toggleChatWindow() {
     if (!this.chatWindow) return
     if (this.chatWindow.isVisible()) {
       this.chatWindow.hide()
+      this.live2dWindow?.setIgnoreMouseEvents(false)
     } else {
       this.chatWindow.show()
       this.chatWindow.focus()
+      this.live2dWindow?.setIgnoreMouseEvents(true, { forward: true })
     }
   }
 
@@ -222,6 +255,9 @@ class Application {
       if (key === 'live2dModelPath' && typeof value === 'string') {
         this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, value)
       }
+      if (key === 'hotkeys') {
+        this.registerGlobalShortcuts()
+      }
     })
     ipcMain.handle(IPC_CHANNELS.CONFIG_GET_ALL, () => this.configManager.getAll())
 
@@ -234,6 +270,13 @@ class Application {
     ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_CREATE, (_e, conversation) => this.conversationManager.create(conversation))
     ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_SAVE, (_e, conversation) => this.conversationManager.save(conversation))
     ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_DELETE, (_e, id: string) => this.conversationManager.delete(id))
+
+    ipcMain.handle(IPC_CHANNELS.MEMORY_LIST, () => this.memoryManager.list())
+    ipcMain.handle(IPC_CHANNELS.MEMORY_DELETE, (_e, id: string) => this.memoryManager.delete(id))
+    ipcMain.handle(IPC_CHANNELS.MEMORY_CLEAR, () => this.memoryManager.clear())
+    ipcMain.handle(IPC_CHANNELS.MEMORY_MERGE, (_e, ids: string[]) =>
+      this.memoryManager.merge(ids, this.configManager.getAll().agentChain.memoryMaxItems)
+    )
 
     ipcMain.handle(IPC_CHANNELS.TOOL_EXECUTE, async (_e, name: string, args: Record<string, unknown>) => {
       return this.toolManager.execute(name, args)
@@ -265,7 +308,10 @@ class Application {
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_CHAT, () => this.toggleChatWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_LIVE2D, () => this.toggleLive2DWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
-    ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, (e) => BrowserWindow.fromWebContents(e.sender)?.hide())
+    ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, (e) => {
+      BrowserWindow.fromWebContents(e.sender)?.hide()
+      this.live2dWindow?.setIgnoreMouseEvents(false)
+    })
 
     ipcMain.handle(IPC_CHANNELS.DIALOG_SELECT_FOLDER, async () => {
       const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
@@ -304,6 +350,27 @@ class Application {
       }
       this.startRandomTimer()
     }, delay)
+  }
+
+  private resolveIconPath(): string | null {
+    const candidates = [
+      path.join(process.cwd(), 'build', 'icon.png'),
+      path.join(app.getAppPath(), 'build', 'icon.png'),
+      path.join(process.resourcesPath, 'build', 'icon.png'),
+      path.join(process.resourcesPath, 'icon.png'),
+    ]
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return p
+    }
+    return null
+  }
+
+  private resolveNativeIcon() {
+    const iconPath = this.resolveIconPath()
+    if (!iconPath) return nativeImage.createEmpty()
+    const icon = nativeImage.createFromPath(iconPath)
+    if (icon.isEmpty()) return nativeImage.createEmpty()
+    return icon.resize({ width: 16, height: 16 })
   }
 }
 
