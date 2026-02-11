@@ -307,18 +307,41 @@ class Application {
 
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_CHAT, () => this.toggleChatWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_LIVE2D, () => this.toggleLive2DWindow())
-    ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
+    ipcMain.handle(IPC_CHANNELS.WINDOW_OPEN_SETTINGS, () => {
+      this.mainWindow?.show()
+      this.mainWindow?.focus()
+    })
+    ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, (e) => {
+      const window = BrowserWindow.fromWebContents(e.sender)
+      if (window) {
+        window.minimize()
+      }
+    })
     ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, (e) => {
-      BrowserWindow.fromWebContents(e.sender)?.hide()
-      this.live2dWindow?.setIgnoreMouseEvents(false)
+      const window = BrowserWindow.fromWebContents(e.sender)
+      if (window) {
+        if (window === this.mainWindow) {
+          window.hide() // 只有主窗口是隐藏
+        } else if (window === this.chatWindow) {
+          window.hide() // 聊天窗口也隐藏
+          this.live2dWindow?.setIgnoreMouseEvents(false) // 恢复Live2D点击穿透
+        } else {
+          window.close() // 其他窗口关闭
+        }
+      }
     })
 
     ipcMain.handle(IPC_CHANNELS.DIALOG_SELECT_FOLDER, async () => {
-      const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+      const result = await dialog.showOpenDialog(this.mainWindow!, {
+        properties: ['openDirectory'],
+      })
       return result.canceled ? null : result.filePaths[0]
     })
     ipcMain.handle(IPC_CHANNELS.DIALOG_SELECT_FILE, async (_e, filters) => {
-      const result = await dialog.showOpenDialog({ properties: ['openFile'], filters })
+      const result = await dialog.showOpenDialog(this.mainWindow!, {
+        properties: ['openFile'],
+        filters,
+      })
       return result.canceled ? null : result.filePaths[0]
     })
   }

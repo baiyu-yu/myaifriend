@@ -213,6 +213,7 @@ export const IPC_CHANNELS = {
   // Window
   WINDOW_TOGGLE_CHAT: 'window:toggleChat',
   WINDOW_TOGGLE_LIVE2D: 'window:toggleLive2D',
+  WINDOW_OPEN_SETTINGS: 'window:openSettings',
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_CLOSE: 'window:close',
 

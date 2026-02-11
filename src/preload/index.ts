@@ -66,6 +66,7 @@ const electronAPI = {
   window: {
     toggleChat: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_TOGGLE_CHAT),
     toggleLive2D: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_TOGGLE_LIVE2D),
+    openSettings: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_OPEN_SETTINGS),
     minimize: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_MINIMIZE),
     close: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_CLOSE),
   },

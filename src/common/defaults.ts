@@ -96,8 +96,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     memoryMaxItems: 500,
   },
   window: {
-    chatWidth: 400,
-    chatHeight: 600,
+    chatWidth: 350,
+    chatHeight: 500,
     live2dWidth: 300,
     live2dHeight: 400,
   },

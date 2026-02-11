@@ -3,6 +3,24 @@
     <canvas ref="canvasRef" />
     <div v-if="statusText" class="status">{{ statusText }}</div>
     <div v-if="errorText" class="error">{{ errorText }}</div>
+
+    <div class="app-icon-menu">
+      <el-dropdown trigger="click" @command="handleCommand">
+        <div class="app-icon" @click.stop>
+          <svg viewBox="0 0 24 24" width="32" height="32" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"></path>
+            <path d="M12 6v6l4 2"></path>
+          </svg>
+        </div>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item command="chat">打开对话</el-dropdown-item>
+            <el-dropdown-item command="settings">设置中心</el-dropdown-item>
+            <el-dropdown-item command="quit" divided>退出程序</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+    </div>
   </div>
 </template>
 
@@ -23,6 +41,16 @@ const cleanups: Array<() => void> = []
 
 let pixiApp: Application | null = null
 let currentModel: Live2DModel | null = null
+
+function handleCommand(command: string) {
+  if (command === 'chat') {
+    window.electronAPI.window.toggleChat()
+  } else if (command === 'settings') {
+    window.electronAPI.window.openSettings()
+  } else if (command === 'quit') {
+    window.electronAPI.window.close()
+  }
+}
 
 function toModelUrl(inputPath: string): string {
   const modelPath = inputPath.trim()
@@ -123,7 +151,7 @@ function handleResize() {
 }
 
 function handleClick(event: MouseEvent) {
-  window.electronAPI.window.toggleChat()
+  // window.electronAPI.window.toggleChat() // Removed toggle on click, now handled by menu
   window.electronAPI.trigger.invoke({ trigger: 'click_avatar' })
   if (currentModel) {
     currentModel.tap(event.clientX, event.clientY)
@@ -214,5 +242,33 @@ canvas {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.app-icon-menu {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1000;
+  -webkit-app-region: no-drag;
+}
+
+.app-icon {
+  width: 32px;
+  height: 32px;
+  background-color: rgba(255, 255, 255, 0.8);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: all 0.2s;
+  color: #409eff;
+}
+
+.app-icon:hover {
+  background-color: #fff;
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 </style>

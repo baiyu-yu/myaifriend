@@ -1,6 +1,11 @@
 <template>
   <div class="settings-page">
-    <el-page-header content="设置中心" />
+    <div class="header-area">
+      <el-button @click="backToHome" circle class="back-btn">
+        <el-icon><Back /></el-icon>
+      </el-button>
+      <el-page-header content="设置中心" icon="" title="" @back="backToHome" />
+    </div>
 
     <el-tabs v-model="activeTab" class="tabs">
       <el-tab-pane label="API 配置" name="api">
@@ -427,9 +432,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { v4 as uuidv4 } from 'uuid'
 import { useConfigStore } from '../stores/config'
-import type {
+import { Back } from '@element-plus/icons-vue'
+
+type MappingRow = { alias: string; target: string }
   ApiConfig,
   CharacterConfig,
   ModelRouteRule,
@@ -443,6 +451,7 @@ type MemoryRow = { id: string; sourceId: string; text: string; createdAt: number
 type MemoryGroupRow = { sourceId: string; count: number; preview: string; ids: string[] }
 
 const configStore = useConfigStore()
+const router = useRouter()
 const activeTab = ref('api')
 const fileChangeInfo = '{{fileChangeInfo}}'
 
@@ -562,6 +571,7 @@ async function removeWatchFolder(index: number) {
 
 async function selectLive2DModel() {
   const file = await window.electronAPI.dialog.selectFile([{ name: 'Live2D Model', extensions: ['model3.json', 'json'] }])
+  // Electron 这里的 dialog 返回的是绝对路径
   if (file) {
     configStore.config.live2dModelPath = file
   }
@@ -746,6 +756,10 @@ async function mergeMemoryGroup(ids: string[]) {
   await loadMemories()
 }
 
+function backToHome() {
+  router.push('/live2d')
+}
+
 onMounted(async () => {
   await configStore.loadConfig()
   syncActionMapRowsFromConfig()
@@ -758,44 +772,103 @@ onMounted(async () => {
 
 <style scoped>
 .settings-page {
-  padding: 16px;
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.header-area {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.back-btn {
+  font-size: 18px;
 }
 
 .tabs {
-  margin-top: 12px;
+  margin-top: 20px;
+  background-color: #fff;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+
+:deep(.el-tabs__item) {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+:deep(.el-tabs__nav-wrap::after) {
+  height: 1px;
+  background-color: #ebeef5;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  font-weight: 600;
 }
 
 .ellipsis {
   max-height: 64px;
   overflow: hidden;
   color: #606266;
-  line-height: 1.5;
+  line-height: 1.6;
+  font-size: 14px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .actions {
-  margin-top: 12px;
+  margin-top: 16px;
   display: flex;
   gap: 8px;
+  justify-content: flex-end;
 }
 
 .active {
-  border-color: #409eff;
+  border: 1px solid #409eff;
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.1);
 }
 
 .mapping-block {
-  margin-bottom: 14px;
+  margin-bottom: 24px;
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+  padding: 16px;
+  background-color: #fafafa;
 }
 
 .mapping-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+  font-weight: 500;
+}
+
+.mapping-header span {
+  font-size: 15px;
+  color: #303133;
+}
+
+:deep(.el-form-item__label) {
+  font-weight: 500;
+}
+
+:deep(.el-card) {
+  transition: all 0.3s;
+  margin-bottom: 12px;
+}
+
+:deep(.el-card:hover) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 </style>
