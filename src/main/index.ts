@@ -33,6 +33,12 @@ class Application {
 
     // 注册内置工具
     this.toolManager.registerBuiltinTools()
+    const pluginDir = path.join(app.getPath('userData'), 'tools')
+    const discovery = await this.toolManager.discoverTools(pluginDir)
+    if (discovery.errors.length > 0) {
+      console.warn('[ToolManager] 插件加载告警:', discovery.errors)
+    }
+    console.log(`[ToolManager] 已加载工具 ${this.toolManager.count} 个（插件新增 ${discovery.loaded} 个）`)
 
     this.createMainWindow()
     this.createChatWindow()
