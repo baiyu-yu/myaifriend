@@ -64,8 +64,8 @@
 ## 未完成（当前重点）
 
 ### Phase 6 Live2D
-- [ ] 6.1 接入 `pixi-live2d-display` 真实渲染
-- [ ] 6.2 支持 `.model3.json` / `.moc3` 模型链路
+- [x] 6.1 接入 `pixi-live2d-display` 真实渲染（基础版）
+- [x] 6.2 支持 `.model3.json` / `.moc3` 模型链路（基础版）
 - [ ] 6.3 AI 驱动真实表情/动作映射
 
 ### Phase 8 交付完善

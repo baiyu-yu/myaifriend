@@ -148,6 +148,7 @@ class Application {
         preload: path.join(__dirname, '../preload/index.js'),
         contextIsolation: true,
         nodeIntegration: false,
+        webSecurity: false,
       },
     })
 
@@ -158,6 +159,13 @@ class Application {
     } else {
       this.live2dWindow.loadFile(path.join(__dirname, '../../renderer/index.html'), { hash: 'live2d' })
     }
+
+    this.live2dWindow.webContents.on('did-finish-load', () => {
+      const modelPath = this.configManager.getAll().live2dModelPath
+      if (modelPath) {
+        this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
+      }
+    })
   }
 
   private createTray() {
@@ -209,7 +217,12 @@ class Application {
 
   private registerIPCHandlers() {
     ipcMain.handle(IPC_CHANNELS.CONFIG_GET, (_e, key: string) => this.configManager.get(key))
-    ipcMain.handle(IPC_CHANNELS.CONFIG_SET, (_e, key: string, value: unknown) => this.configManager.set(key, value))
+    ipcMain.handle(IPC_CHANNELS.CONFIG_SET, (_e, key: string, value: unknown) => {
+      this.configManager.set(key, value)
+      if (key === 'live2dModelPath' && typeof value === 'string') {
+        this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, value)
+      }
+    })
     ipcMain.handle(IPC_CHANNELS.CONFIG_GET_ALL, () => this.configManager.getAll())
 
     ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_e, messages, apiConfigId, model) => {

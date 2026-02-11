@@ -6,6 +6,9 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
 import './styles/global.css'
+import * as PIXI from 'pixi.js'
+
+;(window as any).PIXI = PIXI
 
 const app = createApp(App)
 
