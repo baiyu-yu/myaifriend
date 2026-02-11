@@ -436,8 +436,7 @@ import { useRouter } from 'vue-router'
 import { v4 as uuidv4 } from 'uuid'
 import { useConfigStore } from '../stores/config'
 import { Back } from '@element-plus/icons-vue'
-
-type MappingRow = { alias: string; target: string }
+import type {
   ApiConfig,
   CharacterConfig,
   ModelRouteRule,
