@@ -1,4 +1,14 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, dialog, shell, Tray, Menu, nativeImage } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  globalShortcut,
+  ipcMain,
+  dialog,
+  shell,
+  Tray,
+  Menu,
+  nativeImage,
+} from 'electron'
 import path from 'path'
 import { ConfigManager } from './config-manager'
 import { ConversationManager } from './conversation-manager'
@@ -24,14 +34,14 @@ class Application {
   async init() {
     await app.whenReady()
 
-    // 初始化管理器
+    // 初始化各类管理器
     this.configManager = new ConfigManager()
     this.conversationManager = new ConversationManager()
     this.toolManager = new ToolManager()
     this.aiEngine = new AIEngine(this.configManager)
     this.fileWatcher = new FileWatcher()
 
-    // 注册内置工具
+    // 注册内置工具，并尝试加载插件工具
     this.toolManager.registerBuiltinTools()
     const pluginDir = path.join(app.getPath('userData'), 'tools')
     const discovery = await this.toolManager.discoverTools(pluginDir)
@@ -70,7 +80,7 @@ class Application {
         preload: path.join(__dirname, '../preload/index.js'),
         contextIsolation: true,
         nodeIntegration: false,
-      }
+      },
     })
 
     if (process.env.NODE_ENV === 'development') {
@@ -100,7 +110,7 @@ class Application {
         preload: path.join(__dirname, '../preload/index.js'),
         contextIsolation: true,
         nodeIntegration: false,
-      }
+      },
     })
 
     if (process.env.NODE_ENV === 'development') {
@@ -126,10 +136,10 @@ class Application {
         preload: path.join(__dirname, '../preload/index.js'),
         contextIsolation: true,
         nodeIntegration: false,
-      }
+      },
     })
 
-    // 允许点击穿透到桌面（除了模型区域）
+    // 允许鼠标事件穿透桌面（后续可结合真实模型区域做精细控制）
     this.live2dWindow.setIgnoreMouseEvents(true, { forward: true })
 
     if (process.env.NODE_ENV === 'development') {
@@ -146,10 +156,10 @@ class Application {
 
     const contextMenu = Menu.buildFromTemplate([
       { label: '打开设置', click: () => this.mainWindow?.show() },
-      { label: '显示/隐藏对话', click: () => this.toggleChatWindow() },
-      { label: '显示/隐藏形象', click: () => this.toggleLive2DWindow() },
+      { label: '显示/隐藏对话窗口', click: () => this.toggleChatWindow() },
+      { label: '显示/隐藏Live2D', click: () => this.toggleLive2DWindow() },
       { type: 'separator' },
-      { label: '退出', click: () => { app.quit() } }
+      { label: '退出', click: () => app.quit() },
     ])
     this.tray.setContextMenu(contextMenu)
     this.tray.on('double-click', () => this.mainWindow?.show())
@@ -160,7 +170,6 @@ class Application {
 
     globalShortcut.register(config.hotkeys.toggleChat, () => {
       this.toggleChatWindow()
-      // 发送唤起事件到渲染进程
       const ctx: InvokeContext = { trigger: 'hotkey' }
       this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
     })
@@ -190,33 +199,21 @@ class Application {
   }
 
   private registerIPCHandlers() {
-    // --- Config ---
-    ipcMain.handle(IPC_CHANNELS.CONFIG_GET, (_e, key: string) => {
-      return this.configManager.get(key)
-    })
+    // Config
+    ipcMain.handle(IPC_CHANNELS.CONFIG_GET, (_e, key: string) => this.configManager.get(key))
     ipcMain.handle(IPC_CHANNELS.CONFIG_SET, (_e, key: string, value: unknown) => {
       this.configManager.set(key, value)
     })
-    ipcMain.handle(IPC_CHANNELS.CONFIG_GET_ALL, () => {
-      return this.configManager.getAll()
-    })
+    ipcMain.handle(IPC_CHANNELS.CONFIG_GET_ALL, () => this.configManager.getAll())
 
-    // --- Chat ---
+    // Chat
     ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_e, messages, apiConfigId, model) => {
       return this.aiEngine.chat(messages, apiConfigId, model)
     })
-    ipcMain.handle(IPC_CHANNELS.CHAT_ABORT, () => {
-      this.aiEngine.abort()
-    })
-    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_LIST, () => {
-      return this.conversationManager.list()
-    })
-    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_GET, (_e, id: string) => {
-      return this.conversationManager.get(id)
-    })
-    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_CREATE, (_e, conversation) => {
-      return this.conversationManager.create(conversation)
-    })
+    ipcMain.handle(IPC_CHANNELS.CHAT_ABORT, () => this.aiEngine.abort())
+    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_LIST, () => this.conversationManager.list())
+    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_GET, (_e, id: string) => this.conversationManager.get(id))
+    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_CREATE, (_e, conversation) => this.conversationManager.create(conversation))
     ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_SAVE, (_e, conversation) => {
       this.conversationManager.save(conversation)
     })
@@ -224,15 +221,13 @@ class Application {
       this.conversationManager.delete(id)
     })
 
-    // --- Tools ---
+    // Tools
     ipcMain.handle(IPC_CHANNELS.TOOL_EXECUTE, async (_e, name: string, args: Record<string, unknown>) => {
       return this.toolManager.execute(name, args)
     })
-    ipcMain.handle(IPC_CHANNELS.TOOL_LIST, () => {
-      return this.toolManager.getToolDefinitions()
-    })
+    ipcMain.handle(IPC_CHANNELS.TOOL_LIST, () => this.toolManager.getToolDefinitions())
 
-    // --- File Operations ---
+    // File operations
     ipcMain.handle(IPC_CHANNELS.FILE_READ, async (_e, filePath: string) => {
       return this.toolManager.execute('file_read', { path: filePath })
     })
@@ -242,11 +237,9 @@ class Application {
     ipcMain.handle(IPC_CHANNELS.FILE_LIST, async (_e, folderPath: string) => {
       return this.toolManager.execute('file_list', { path: folderPath })
     })
-    ipcMain.handle(IPC_CHANNELS.FILE_OPEN_IN_BROWSER, async (_e, filePath: string) => {
-      return shell.openPath(filePath)
-    })
+    ipcMain.handle(IPC_CHANNELS.FILE_OPEN_IN_BROWSER, async (_e, filePath: string) => shell.openPath(filePath))
 
-    // --- Live2D ---
+    // Live2D
     ipcMain.handle(IPC_CHANNELS.LIVE2D_ACTION, (_e, action) => {
       this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_ACTION, action)
     })
@@ -254,17 +247,13 @@ class Application {
       this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
     })
 
-    // --- Window ---
+    // Window
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_CHAT, () => this.toggleChatWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_LIVE2D, () => this.toggleLive2DWindow())
-    ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, (e) => {
-      BrowserWindow.fromWebContents(e.sender)?.minimize()
-    })
-    ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, (e) => {
-      BrowserWindow.fromWebContents(e.sender)?.hide()
-    })
+    ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())
+    ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, (e) => BrowserWindow.fromWebContents(e.sender)?.hide())
 
-    // --- Dialog ---
+    // Dialog
     ipcMain.handle(IPC_CHANNELS.DIALOG_SELECT_FOLDER, async () => {
       const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
       return result.canceled ? null : result.filePaths[0]
@@ -279,14 +268,12 @@ class Application {
     const config = this.configManager.getAll()
     for (const folder of config.watchFolders) {
       this.fileWatcher.watch(folder, (eventType, filePath) => {
-        // 通知渲染进程
         const data = { type: eventType, path: filePath }
         this.chatWindow?.webContents.send(IPC_CHANNELS.FILE_WATCH_EVENT, data)
 
-        // 触发 AI 对话
         const ctx: InvokeContext = {
           trigger: 'file_change',
-          fileChangeInfo: { type: eventType as 'add' | 'change' | 'unlink', filePath }
+          fileChangeInfo: { type: eventType as 'add' | 'change' | 'unlink', filePath },
         }
         this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
       })
@@ -304,7 +291,6 @@ class Application {
       if (this.chatWindow && !this.chatWindow.isVisible()) {
         this.chatWindow.show()
       }
-      // 重新启动定时器
       this.startRandomTimer()
     }, delay)
   }

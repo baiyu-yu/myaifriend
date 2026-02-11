@@ -8,14 +8,14 @@ import { ToolDefinition, ToolResult } from '../../../common/types'
 export class FileReadTool implements ITool {
   definition: ToolDefinition = {
     name: 'file_read',
-    description: '读取指定路径的文件内容。支持 txt、word(doc/docx)、excel(xls/xlsx)、html 和图片文件。',
+    description: '读取指定文件内容，支持 txt/doc/docx/xls/xlsx/html 与常见图片格式。',
     parameters: {
       path: {
         type: 'string',
-        description: '要读取的文件完整路径'
-      }
+        description: '要读取的文件完整路径',
+      },
     },
-    required: ['path']
+    required: ['path'],
   }
 
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
@@ -45,17 +45,17 @@ export class FileReadTool implements ITool {
           const workbook = new ExcelJS.Workbook()
           await workbook.xlsx.readFile(filePath)
           const sheets: string[] = []
+
           workbook.eachSheet((sheet) => {
             const rows: string[] = []
             rows.push(`=== Sheet: ${sheet.name} ===`)
             sheet.eachRow((row) => {
-              const values = Array.isArray(row.values)
-                ? row.values.slice(1).map(v => String(v ?? ''))
-                : []
+              const values = Array.isArray(row.values) ? row.values.slice(1).map((v) => String(v ?? '')) : []
               rows.push(values.join('\t'))
             })
             sheets.push(rows.join('\n'))
           })
+
           content = sheets.join('\n\n')
           break
         }
@@ -81,7 +81,7 @@ export class FileReadTool implements ITool {
       return {
         toolCallId: '',
         content: `读取文件失败: ${error instanceof Error ? error.message : String(error)}`,
-        isError: true
+        isError: true,
       }
     }
   }

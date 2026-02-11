@@ -6,18 +6,30 @@ export class FileWatcher {
   private watchers: Map<string, FSWatcher> = new Map()
 
   watch(folderPath: string, callback: FileEventCallback): void {
-    if (this.watchers.has(folderPath)) {
-      return
-    }
+    if (this.watchers.has(folderPath)) return
 
     const watcher = chokidar.watch(folderPath, {
       persistent: true,
       ignoreInitial: true,
-      // 支持的文件类型
-      ignored: (path: string) => {
-        const ext = path.split('.').pop()?.toLowerCase()
-        if (!ext) return false // 不忽略目录
-        const allowed = ['txt', 'doc', 'docx', 'xls', 'xlsx', 'html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']
+      // 仅监听项目需要的文件类型，降低噪音与资源开销。
+      ignored: (filePath: string) => {
+        const ext = filePath.split('.').pop()?.toLowerCase()
+        if (!ext) return false
+        const allowed = [
+          'txt',
+          'doc',
+          'docx',
+          'xls',
+          'xlsx',
+          'html',
+          'htm',
+          'png',
+          'jpg',
+          'jpeg',
+          'gif',
+          'bmp',
+          'webp',
+        ]
         return !allowed.includes(ext)
       },
       depth: 3,
@@ -33,10 +45,9 @@ export class FileWatcher {
 
   unwatch(folderPath: string): void {
     const watcher = this.watchers.get(folderPath)
-    if (watcher) {
-      watcher.close()
-      this.watchers.delete(folderPath)
-    }
+    if (!watcher) return
+    watcher.close()
+    this.watchers.delete(folderPath)
   }
 
   stopAll(): void {
