@@ -1,4 +1,5 @@
 import Store from 'electron-store'
+import fs from 'fs'
 import path from 'path'
 
 export interface MemoryItem {
@@ -107,11 +108,15 @@ export class MemoryManager {
   private store: any
 
   constructor() {
+    const testCwd = path.join(process.cwd(), '.aibot-test-store', String(process.pid))
+    if (!process.versions.electron) {
+      fs.mkdirSync(testCwd, { recursive: true })
+    }
     const fallbackOptions =
       process.versions.electron
         ? {}
         : {
-            cwd: path.join(process.cwd(), '.aibot-test-store'),
+            cwd: testCwd,
             projectVersion: '0.0.0',
           }
     this.store = new Store<MemoryStoreShape>({

@@ -7,11 +7,19 @@ export const useConfigStore = defineStore('config', () => {
   const config = ref<AppConfig>({ ...DEFAULT_CONFIG })
   const loading = ref(false)
 
+  function getElectronAPI() {
+    const api = window.electronAPI
+    if (!api?.config) {
+      throw new Error('桌面桥接不可用，请使用桌面应用启动（npm run dev:electron 或打包版）。')
+    }
+    return api
+  }
+
   /** 从主进程加载配置 */
   async function loadConfig() {
     loading.value = true
     try {
-      const data = await window.electronAPI.config.getAll()
+      const data = await getElectronAPI().config.getAll()
       config.value = data
     } catch (e) {
       console.error('加载配置失败:', e)
@@ -23,7 +31,7 @@ export const useConfigStore = defineStore('config', () => {
   /** 保存单个配置项 */
   async function setConfig<K extends keyof AppConfig>(key: K, value: AppConfig[K]) {
     config.value[key] = value
-    await window.electronAPI.config.set(key, value)
+    return getElectronAPI().config.set(key, value)
   }
 
   // --- API Configs ---

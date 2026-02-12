@@ -33,7 +33,29 @@ class Application {
   private memoryManager!: MemoryManager
 
   private randomTimer: NodeJS.Timeout | null = null
+  private persistWindowTimer: NodeJS.Timeout | null = null
   private isQuitting = false
+
+  private registerShortcutWithFallback(
+    shortcut: string,
+    fallback: string,
+    onTrigger: () => void
+  ): { applied: string; warnings: string[] } {
+    const warnings: string[] = []
+    if (globalShortcut.register(shortcut, onTrigger)) {
+      return { applied: shortcut, warnings }
+    }
+
+    warnings.push(`快捷键 "${shortcut}" 注册失败，已回退到 "${fallback}"`)
+    console.warn(`[Hotkey] 注册失败: ${shortcut}，回退到 ${fallback}`)
+    if (shortcut !== fallback && globalShortcut.register(fallback, onTrigger)) {
+      return { applied: fallback, warnings }
+    }
+
+    warnings.push(`回退快捷键 "${fallback}" 也注册失败`)
+    console.warn(`[Hotkey] 回退注册也失败: ${fallback}`)
+    return { applied: '', warnings }
+  }
 
   async init() {
     await app.whenReady()
@@ -75,6 +97,7 @@ class Application {
       globalShortcut.unregisterAll()
       this.fileWatcher.stopAll()
       if (this.randomTimer) clearTimeout(this.randomTimer)
+      if (this.persistWindowTimer) clearTimeout(this.persistWindowTimer)
     })
   }
 
@@ -139,6 +162,8 @@ class Application {
     } else {
       this.chatWindow.loadFile(path.join(__dirname, '../../renderer/index.html'), { hash: 'chat' })
     }
+
+    this.chatWindow.on('resize', () => this.schedulePersistWindowSize())
   }
 
   private createLive2DWindow() {
@@ -178,6 +203,8 @@ class Application {
         this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
       }
     })
+
+    this.live2dWindow.on('resize', () => this.schedulePersistWindowSize())
   }
 
   private createTray() {
@@ -197,35 +224,32 @@ class Application {
     this.tray.on('double-click', () => this.mainWindow?.show())
   }
 
-  private registerGlobalShortcuts() {
+  private registerGlobalShortcuts(): { applied: { toggleChat: string; toggleLive2D: string }; warnings: string[] } {
     const config = this.configManager.getAll()
     globalShortcut.unregisterAll()
 
     const chatHotkey = config.hotkeys.toggleChat || 'CommandOrControl+Shift+A'
     const live2dHotkey = config.hotkeys.toggleLive2D || 'CommandOrControl+Shift+L'
 
-    const registeredChat = globalShortcut.register(chatHotkey, () => {
+    const chatHandler = () => {
       this.toggleChatWindow()
       const ctx: InvokeContext = { trigger: 'hotkey' }
       this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
-    })
-    const registeredLive2D = globalShortcut.register(live2dHotkey, () => this.toggleLive2DWindow())
-
-    if (!registeredChat) {
-      const fallback = 'CommandOrControl+Shift+A'
-      console.warn(`[Hotkey] 注册失败: ${chatHotkey}，回退到 ${fallback}`)
-      globalShortcut.register(fallback, () => {
-        this.toggleChatWindow()
-        const ctx: InvokeContext = { trigger: 'hotkey' }
-        this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
-      })
     }
+    const live2dHandler = () => this.toggleLive2DWindow()
 
-    if (!registeredLive2D) {
-      const fallback = 'CommandOrControl+Shift+L'
-      console.warn(`[Hotkey] 注册失败: ${live2dHotkey}，回退到 ${fallback}`)
-      globalShortcut.register(fallback, () => this.toggleLive2DWindow())
+    const chatResult = this.registerShortcutWithFallback(chatHotkey, 'CommandOrControl+Shift+A', chatHandler)
+    const live2dResult = this.registerShortcutWithFallback(
+      live2dHotkey,
+      'CommandOrControl+Shift+L',
+      live2dHandler
+    )
+
+    const applied = {
+      toggleChat: chatResult.applied || 'CommandOrControl+Shift+A',
+      toggleLive2D: live2dResult.applied || 'CommandOrControl+Shift+L',
     }
+    return { applied, warnings: [...chatResult.warnings, ...live2dResult.warnings] }
   }
 
   private toggleChatWindow() {
@@ -240,6 +264,15 @@ class Application {
     }
   }
 
+  private showChatWindow() {
+    if (!this.chatWindow) return
+    if (!this.chatWindow.isVisible()) {
+      this.chatWindow.show()
+    }
+    this.chatWindow.focus()
+    this.live2dWindow?.setIgnoreMouseEvents(true, { forward: true })
+  }
+
   private toggleLive2DWindow() {
     if (!this.live2dWindow) return
     if (this.live2dWindow.isVisible()) {
@@ -249,10 +282,46 @@ class Application {
     }
   }
 
+  private restartFileWatcher() {
+    this.fileWatcher.stopAll()
+    this.startFileWatcher()
+  }
+
+  private restartRandomTimer() {
+    if (this.randomTimer) {
+      clearTimeout(this.randomTimer)
+      this.randomTimer = null
+    }
+    this.startRandomTimer()
+  }
+
+  private schedulePersistWindowSize() {
+    if (this.persistWindowTimer) {
+      clearTimeout(this.persistWindowTimer)
+    }
+    this.persistWindowTimer = setTimeout(() => {
+      const next = { ...this.configManager.getAll().window }
+      if (this.chatWindow && !this.chatWindow.isDestroyed()) {
+        const [chatWidth, chatHeight] = this.chatWindow.getSize()
+        next.chatWidth = chatWidth
+        next.chatHeight = chatHeight
+      }
+      if (this.live2dWindow && !this.live2dWindow.isDestroyed()) {
+        const [live2dWidth, live2dHeight] = this.live2dWindow.getSize()
+        next.live2dWidth = live2dWidth
+        next.live2dHeight = live2dHeight
+      }
+      this.configManager.set('window', next)
+    }, 300)
+  }
+
   private registerIPCHandlers() {
     ipcMain.handle(IPC_CHANNELS.CONFIG_GET, (_e, key: string) => this.configManager.get(key))
     ipcMain.handle(IPC_CHANNELS.CONFIG_SET, (_e, key: string, value: unknown) => {
       this.configManager.set(key, value)
+      let hotkeyResult:
+        | { applied: { toggleChat: string; toggleLive2D: string }; warnings: string[] }
+        | undefined
       if (key === 'live2dModelPath' && typeof value === 'string') {
         if (value) {
           this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, value)
@@ -262,8 +331,24 @@ class Application {
         }
       }
       if (key === 'hotkeys') {
-        this.registerGlobalShortcuts()
+        hotkeyResult = this.registerGlobalShortcuts()
+        this.configManager.set('hotkeys', hotkeyResult.applied)
       }
+      if (key === 'watchFolders') {
+        this.restartFileWatcher()
+      }
+      if (key === 'randomTimerRange') {
+        this.restartRandomTimer()
+      }
+      if (key === 'window') {
+        const windowConfig = this.configManager.getAll().window
+        this.chatWindow?.setSize(windowConfig.chatWidth, windowConfig.chatHeight)
+        this.live2dWindow?.setSize(windowConfig.live2dWidth, windowConfig.live2dHeight)
+      }
+      if (hotkeyResult) {
+        return hotkeyResult
+      }
+      return { ok: true }
     })
     ipcMain.handle(IPC_CHANNELS.CONFIG_GET_ALL, () => this.configManager.getAll())
 
@@ -315,6 +400,7 @@ class Application {
     })
 
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_CHAT, () => this.toggleChatWindow())
+    ipcMain.handle(IPC_CHANNELS.WINDOW_SHOW_CHAT, () => this.showChatWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_LIVE2D, () => this.toggleLive2DWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_OPEN_SETTINGS, () => {
       this.mainWindow?.show()
@@ -323,6 +409,13 @@ class Application {
     ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, (e) => {
       const window = BrowserWindow.fromWebContents(e.sender)
       if (window) {
+        if (window === this.chatWindow || window === this.live2dWindow) {
+          window.hide()
+          if (window === this.chatWindow) {
+            this.live2dWindow?.setIgnoreMouseEvents(false)
+          }
+          return
+        }
         window.minimize()
       }
     })

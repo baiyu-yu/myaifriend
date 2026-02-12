@@ -350,6 +350,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import { useConfigStore } from '../stores/config'
 import { Back } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import type {
   ApiConfig,
   CharacterConfig,
@@ -386,6 +387,15 @@ const modelAssignmentForm = reactive<Record<TaskType, { apiConfigId: string; mod
   code_generation: { apiConfigId: '', model: '' },
   premier: { apiConfigId: '', model: '' },
 })
+
+function getElectronAPIOrNotify() {
+  const api = window.electronAPI
+  if (!api) {
+    ElMessage.error('桌面桥接不可用，请使用桌面应用启动（npm run dev:electron 或打包版）。')
+    return null
+  }
+  return api
+}
 
 function syncModelAssignmentsFromConfig() {
   const assignments = configStore.config.modelAssignments
@@ -463,9 +473,12 @@ async function saveChar() {
 const watchFolderRows = computed(() => configStore.config.watchFolders.map((path) => ({ path })))
 
 async function addWatchFolder() {
-  const folder = await window.electronAPI.dialog.selectFolder()
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  const folder = await api.dialog.selectFolder()
   if (!folder) return
   await configStore.setConfig('watchFolders', [...configStore.config.watchFolders, folder])
+  ElMessage.success('已添加监听文件夹')
 }
 
 async function removeWatchFolder(index: number) {
@@ -474,15 +487,19 @@ async function removeWatchFolder(index: number) {
 }
 
 async function selectLive2DModel() {
-  const file = await window.electronAPI.dialog.selectFile([{ name: 'Live2D Model', extensions: ['model3.json', 'json'] }])
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  const file = await api.dialog.selectFile([{ name: 'Live2D Model JSON', extensions: ['json'] }])
   if (file) {
     configStore.config.live2dModelPath = file
+    ElMessage.success('已选择 Live2D 模型文件')
   }
 }
 
 async function saveLive2DConfig() {
   await configStore.setConfig('live2dModelPath', configStore.config.live2dModelPath)
   await configStore.setConfig('window', { ...configStore.config.window })
+  ElMessage.success('Live2D 配置已保存')
 }
 
 const expressionRows = ref<MappingRow[]>([])
@@ -531,7 +548,23 @@ async function saveLive2DActionMap() {
 }
 
 async function saveHotkeys() {
-  await configStore.setConfig('hotkeys', { ...configStore.config.hotkeys })
+  const result = (await configStore.setConfig('hotkeys', {
+    ...configStore.config.hotkeys,
+  })) as
+    | {
+        applied?: { toggleChat: string; toggleLive2D: string }
+        warnings?: string[]
+      }
+    | undefined
+
+  if (result?.applied) {
+    configStore.config.hotkeys = { ...result.applied }
+  }
+  if (result?.warnings?.length) {
+    ElMessage.warning(result.warnings.join('；'))
+  } else {
+    ElMessage.success('快捷键已保存并生效')
+  }
 }
 
 async function saveTriggerPrompts() {
@@ -633,7 +666,10 @@ async function mergeMemoryGroup(ids: string[]) {
 }
 
 function hideSettings() {
-  window.electronAPI.window.close()
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  api.window.showChat()
+  api.window.close()
 }
 
 onMounted(async () => {

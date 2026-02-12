@@ -1,4 +1,5 @@
 import Store from 'electron-store'
+import fs from 'fs'
 import path from 'path'
 import { AppConfig } from '../common/types'
 import { DEFAULT_CONFIG } from '../common/defaults'
@@ -34,11 +35,15 @@ export class ConfigManager {
   private config: AppConfig
 
   constructor() {
+    const testCwd = path.join(process.cwd(), '.aibot-test-store', String(process.pid))
+    if (!process.versions.electron) {
+      fs.mkdirSync(testCwd, { recursive: true })
+    }
     const fallbackOptions =
       process.versions.electron
         ? {}
         : {
-            cwd: path.join(process.cwd(), '.aibot-test-store'),
+            cwd: testCwd,
             projectVersion: '0.0.0',
           }
     this.store = new Store<ConfigStoreShape>({

@@ -27,6 +27,16 @@ export const useChatStore = defineStore('chat', () => {
     () => conversations.value.find((item) => item.id === activeConversationId.value) || null
   )
 
+  async function getElectronAPI(timeoutMs = 3000) {
+    const start = Date.now()
+    while (Date.now() - start < timeoutMs) {
+      const api = window.electronAPI
+      if (api?.chat) return api
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    throw new Error('Electron API 未就绪，请确认通过桌面应用启动。')
+  }
+
   function buildGreetingMessages(): ChatMessage[] {
     const char = configStore.activeCharacter
     if (!char?.greeting) return []
@@ -41,7 +51,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function refreshConversationList() {
-    conversations.value = await window.electronAPI.chat.historyList()
+    conversations.value = await (await getElectronAPI()).chat.historyList()
   }
 
   async function initConversation() {
@@ -63,14 +73,14 @@ export const useChatStore = defineStore('chat', () => {
       createdAt: now,
       updatedAt: now,
     }
-    await window.electronAPI.chat.historyCreate(conversation)
+    await (await getElectronAPI()).chat.historyCreate(conversation)
     activeConversationId.value = conversation.id
     messages.value = [...conversation.messages]
     await refreshConversationList()
   }
 
   async function loadConversation(id: string) {
-    const conversation = await window.electronAPI.chat.historyGet(id)
+    const conversation = await (await getElectronAPI()).chat.historyGet(id)
     if (!conversation) return
     activeConversationId.value = conversation.id
     messages.value = Array.isArray(conversation.messages) ? conversation.messages : []
@@ -78,7 +88,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function saveCurrentConversation(titleOverride?: string) {
     if (!activeConversationId.value) return
-    const current = await window.electronAPI.chat.historyGet(activeConversationId.value)
+    const current = await (await getElectronAPI()).chat.historyGet(activeConversationId.value)
     if (!current) return
     const updated: Conversation = {
       ...current,
@@ -87,7 +97,7 @@ export const useChatStore = defineStore('chat', () => {
       messages: [...messages.value],
       updatedAt: Date.now(),
     }
-    await window.electronAPI.chat.historySave(updated)
+    await (await getElectronAPI()).chat.historySave(updated)
     await refreshConversationList()
   }
 
@@ -98,7 +108,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function deleteConversation(id: string) {
-    await window.electronAPI.chat.historyDelete(id)
+    await (await getElectronAPI()).chat.historyDelete(id)
     if (activeConversationId.value === id) {
       activeConversationId.value = ''
       messages.value = []
@@ -145,7 +155,7 @@ export const useChatStore = defineStore('chat', () => {
 
       apiMessages.push(...messages.value)
 
-      const response = await window.electronAPI.chat.send(apiMessages)
+      const response = await (await getElectronAPI()).chat.send(apiMessages)
       const choice = response.choices?.[0]
       const inference = response.meta
 
@@ -184,7 +194,7 @@ export const useChatStore = defineStore('chat', () => {
               : []),
             ...messages.value,
           ]
-          const followUp = await window.electronAPI.chat.send(followUpMessages)
+          const followUp = await (await getElectronAPI()).chat.send(followUpMessages)
           const followUpChoice = followUp.choices?.[0]
           if (followUpChoice?.message?.content) {
             messages.value.push({
