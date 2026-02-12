@@ -104,6 +104,12 @@ const electronAPI = {
 
   app: {
     getMeta: () => ipcRenderer.invoke(IPC_CHANNELS.APP_GET_META),
+    log: {
+      list: () => ipcRenderer.invoke(IPC_CHANNELS.APP_LOG_LIST),
+      clear: () => ipcRenderer.invoke(IPC_CHANNELS.APP_LOG_CLEAR),
+      add: (level: 'info' | 'warn' | 'error', message: string, source?: string) =>
+        ipcRenderer.invoke(IPC_CHANNELS.APP_LOG_ADD, level, message, source),
+    },
   },
 }
 

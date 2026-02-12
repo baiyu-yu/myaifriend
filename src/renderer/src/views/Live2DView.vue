@@ -120,10 +120,17 @@ async function loadModel(modelPath: string) {
     fitModel(model)
     hasModel.value = true
     statusText.value = ''
+    void window.electronAPI.app.log.add('info', `Live2D 模型加载成功: ${modelPath}`, 'live2d')
   } catch (error) {
-    errorText.value = `模型加载失败: ${error instanceof Error ? error.message : String(error)}`
+    const message = error instanceof Error ? error.message : String(error)
+    errorText.value = `模型加载失败: ${message}`
     statusText.value = ''
     hasModel.value = false
+    void window.electronAPI.app.log.add(
+      'error',
+      `Live2D 模型加载失败: ${modelPath} | ${message}`,
+      'live2d'
+    )
   }
 }
 

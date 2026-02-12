@@ -133,6 +133,14 @@ export interface Live2DActionMap {
   motion: Record<string, string>
 }
 
+export interface AppLogEntry {
+  id: string
+  timestamp: number
+  level: 'info' | 'warn' | 'error'
+  source: string
+  message: string
+}
+
 // --- App Config ---
 export interface AppConfig {
   apiConfigs: ApiConfig[]
@@ -246,4 +254,7 @@ export const IPC_CHANNELS = {
 
   // App
   APP_GET_META: 'app:getMeta',
+  APP_LOG_LIST: 'app:log:list',
+  APP_LOG_CLEAR: 'app:log:clear',
+  APP_LOG_ADD: 'app:log:add',
 } as const

@@ -17,7 +17,7 @@ import { ToolManager } from './tools/tool-manager'
 import { FileWatcher } from './file-watcher'
 import { AIEngine } from './ai/ai-engine'
 import { MemoryManager } from './ai/memory-manager'
-import { IPC_CHANNELS, InvokeContext } from '../common/types'
+import { AppLogEntry, IPC_CHANNELS, InvokeContext } from '../common/types'
 
 class Application {
   private mainWindow: BrowserWindow | null = null
@@ -35,6 +35,7 @@ class Application {
   private randomTimer: NodeJS.Timeout | null = null
   private persistWindowTimer: NodeJS.Timeout | null = null
   private isQuitting = false
+  private runtimeLogs: AppLogEntry[] = []
 
   private registerShortcutWithFallback(
     shortcut: string,
@@ -82,13 +83,34 @@ class Application {
     }
   }
 
+  private addRuntimeLog(
+    level: 'info' | 'warn' | 'error',
+    message: string,
+    source = 'main'
+  ): AppLogEntry {
+    const entry: AppLogEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      timestamp: Date.now(),
+      level,
+      source,
+      message: String(message || ''),
+    }
+    this.runtimeLogs.unshift(entry)
+    if (this.runtimeLogs.length > 500) {
+      this.runtimeLogs = this.runtimeLogs.slice(0, 500)
+    }
+    return entry
+  }
+
   private async discoverPluginTools() {
     const pluginDir = path.join(app.getPath('userData'), 'tools')
     const discovery = await this.toolManager.discoverTools(pluginDir)
     if (discovery.errors.length > 0) {
       console.warn('[ToolManager] 插件加载告警:', discovery.errors)
+      this.addRuntimeLog('warn', `工具插件加载告警: ${discovery.errors.join(' | ')}`, 'tool-manager')
     }
     console.log(`[ToolManager] 已加载工具 ${this.toolManager.count} 个（插件新增 ${discovery.loaded} 个）`)
+    this.addRuntimeLog('info', `工具已加载 ${this.toolManager.count} 个（插件新增 ${discovery.loaded} 个）`, 'tool-manager')
   }
 
   async init() {
@@ -637,6 +659,16 @@ class Application {
       const iconDataUrl = iconPath ? this.toDataUrlByPath(iconPath) : null
       return { name: 'AI Bot', iconDataUrl }
     })
+    ipcMain.handle(IPC_CHANNELS.APP_LOG_LIST, () => this.toIPCData(this.runtimeLogs))
+    ipcMain.handle(IPC_CHANNELS.APP_LOG_CLEAR, () => {
+      this.runtimeLogs = []
+      return { ok: true }
+    })
+    ipcMain.handle(
+      IPC_CHANNELS.APP_LOG_ADD,
+      (_e, level: 'info' | 'warn' | 'error', message: string, source?: string) =>
+        this.addRuntimeLog(level, message, source || 'renderer')
+    )
   }
 
   private startFileWatcher() {

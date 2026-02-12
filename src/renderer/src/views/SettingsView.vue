@@ -323,6 +323,23 @@
         </el-table>
       </el-tab-pane>
 
+      <el-tab-pane label="运行日志" name="logs">
+        <div class="mapping-header" style="margin-bottom: 8px">
+          <el-button type="primary" @click="loadRuntimeLogs">刷新</el-button>
+          <el-button type="danger" plain @click="clearRuntimeLogs">清空日志</el-button>
+        </div>
+        <el-table :data="runtimeLogs" border stripe>
+          <el-table-column label="时间" width="180">
+            <template #default="{ row }">
+              {{ formatTime(row.timestamp) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="level" label="级别" width="90" />
+          <el-table-column prop="source" label="来源" width="130" />
+          <el-table-column prop="message" label="内容" />
+        </el-table>
+      </el-tab-pane>
+
       <el-tab-pane label="唤起提示词" name="trigger">
         <el-form label-width="180px" style="max-width: 860px">
           <el-form-item label="快捷键唤起">
@@ -409,6 +426,13 @@ import { TASK_TYPE_LABELS } from '../../../common/types'
 type MappingRow = { alias: string; target: string }
 type MemoryRow = { id: string; sourceId: string; text: string; createdAt: number; updatedAt: number; hits: number }
 type MemoryGroupRow = { sourceId: string; count: number; preview: string; ids: string[] }
+type RuntimeLogRow = {
+  id: string
+  timestamp: number
+  level: 'info' | 'warn' | 'error'
+  source: string
+  message: string
+}
 
 const configStore = useConfigStore()
 const router = useRouter()
@@ -647,6 +671,7 @@ const toolList = ref<ToolDefinition[]>([])
 const toolsLoading = ref(false)
 const memoryRows = ref<MemoryRow[]>([])
 const memoriesLoading = ref(false)
+const runtimeLogs = ref<RuntimeLogRow[]>([])
 const searchAllowDomainsInput = ref('')
 const searchBlockDomainsInput = ref('')
 const instinctMemoriesInput = ref('')
@@ -758,6 +783,20 @@ async function mergeMemoryGroup(ids: string[]) {
   ElMessage.success('记忆碎片已合并')
 }
 
+async function loadRuntimeLogs() {
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  runtimeLogs.value = await api.app.log.list()
+}
+
+async function clearRuntimeLogs() {
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  await api.app.log.clear()
+  runtimeLogs.value = []
+  ElMessage.success('运行日志已清空')
+}
+
 function hideSettings() {
   router.push('/cover')
 }
@@ -770,6 +809,7 @@ onMounted(async () => {
   syncMemoryLayerInputs()
   await loadTools()
   await loadMemories()
+  await loadRuntimeLogs()
 })
 </script>
 
