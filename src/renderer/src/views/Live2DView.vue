@@ -48,6 +48,77 @@ function logLive2D(level: 'info' | 'warn' | 'error', message: string) {
   void window.electronAPI.app.log.add(level, message, 'live2d')
 }
 
+function ensureInteractionManagerCompat(manager: any): void {
+  if (!manager || typeof manager !== 'object') return
+
+  if (typeof manager.on !== 'function') {
+    if (typeof manager.addListener === 'function') {
+      manager.on = manager.addListener.bind(manager)
+    } else if (typeof manager.addEventListener === 'function') {
+      manager.on = (event: string, handler: (...args: any[]) => void, context?: any) => {
+        if (context) {
+          const wrapped = handler.bind(context)
+          manager.addEventListener(event, wrapped)
+          return wrapped
+        }
+        manager.addEventListener(event, handler)
+        return handler
+      }
+    }
+  }
+
+  if (typeof manager.off !== 'function') {
+    if (typeof manager.removeListener === 'function') {
+      manager.off = manager.removeListener.bind(manager)
+    } else if (typeof manager.removeEventListener === 'function') {
+      manager.off = (event: string, handler: (...args: any[]) => void, context?: any) => {
+        manager.removeEventListener(event, context ? handler.bind(context) : handler)
+      }
+    } else {
+      manager.off = () => undefined
+    }
+  }
+}
+
+function patchRendererInteractionManager(reason: string): void {
+  const manager = (pixiApp as any)?.renderer?.plugins?.interaction
+  if (!manager) {
+    logLive2D('warn', `Live2D interaction manager 不存在: reason=${reason}`)
+    return
+  }
+  const hasOn = typeof manager.on === 'function'
+  const hasOff = typeof manager.off === 'function'
+  if (!hasOn || !hasOff) {
+    ensureInteractionManagerCompat(manager)
+    logLive2D(
+      'warn',
+      `Live2D interaction manager 已做兼容补丁: reason=${reason}, before(on=${hasOn},off=${hasOff}), after(on=${typeof manager.on === 'function'},off=${typeof manager.off === 'function'})`
+    )
+    return
+  }
+  logLive2D('info', `Live2D interaction manager 可用: reason=${reason}, on/off 已存在`)
+}
+
+function destroyCurrentModelSafely(reason: string): void {
+  if (!currentModel || !pixiApp) return
+
+  patchRendererInteractionManager(`destroy-${reason}`)
+  try {
+    pixiApp.stage.removeChild(currentModel as any)
+  } catch (error) {
+    logLive2D('warn', `Live2D 移除旧模型失败: reason=${reason} | ${describeError(error)}`)
+  }
+
+  try {
+    currentModel.destroy()
+    logLive2D('info', `Live2D 旧模型销毁完成: reason=${reason}`)
+  } catch (error) {
+    logLive2D('warn', `Live2D 旧模型销毁异常(已忽略): reason=${reason} | ${describeError(error)}`)
+  } finally {
+    currentModel = null
+  }
+}
+
 function getRuntimeGlobal(name: string): unknown {
   return (window as unknown as Record<string, unknown>)[name]
 }
@@ -219,11 +290,7 @@ async function loadModel(modelPath: string) {
   if (urls.length === 0) return
 
   try {
-    if (currentModel) {
-      pixiApp.stage.removeChild(currentModel as any)
-      currentModel.destroy()
-      currentModel = null
-    }
+    destroyCurrentModelSafely('loadModel')
 
     let model: Live2DModelType | null = null
     const attemptErrors: string[] = []
@@ -266,6 +333,7 @@ async function loadModel(modelPath: string) {
     }
 
     currentModel = model
+    patchRendererInteractionManager('after-model-created')
     model.interactive = true
     pixiApp.stage.addChild(model as any)
     fitModelWithRetry(model)
@@ -362,6 +430,7 @@ onMounted(async () => {
     autoDensity: true,
     resizeTo: window,
   })
+  patchRendererInteractionManager('after-pixi-init')
 
   await configStore.loadConfig()
   await ensureLive2DRuntime()
@@ -412,11 +481,7 @@ onBeforeUnmount(() => {
     idleTicker = null
   }
 
-  if (currentModel && pixiApp) {
-    pixiApp.stage.removeChild(currentModel as any)
-    currentModel.destroy()
-    currentModel = null
-  }
+  destroyCurrentModelSafely('beforeUnmount')
 
   if (pixiApp) {
     pixiApp.destroy(true)
