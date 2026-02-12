@@ -315,7 +315,10 @@ async function loadModel(modelPath: string) {
       }
 
       try {
-        model = await live2DModelCtor.from(url)
+        model = await live2DModelCtor.from(url, {
+          autoInteract: false,
+          autoUpdate: true,
+        } as any)
         if (url === urls[0]) {
           logLive2D('info', `Live2D 模型已从主路径加载: ${url}`)
         } else {
@@ -333,6 +336,7 @@ async function loadModel(modelPath: string) {
     }
 
     currentModel = model
+    ;(currentModel as any).autoInteract = false
     patchRendererInteractionManager('after-model-created')
     model.interactive = true
     pixiApp.stage.addChild(model as any)
