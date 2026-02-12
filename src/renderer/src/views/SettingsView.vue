@@ -411,6 +411,7 @@ function syncModelAssignmentsFromConfig() {
 async function saveModelAssignments() {
   const next = { ...modelAssignmentForm }
   await configStore.setConfig('modelAssignments', next)
+  ElMessage.success('模型分配已保存')
 }
 
 function openApiDialogForCreate() {
@@ -433,10 +434,12 @@ async function saveApi() {
     await configStore.addApiConfig({ ...apiForm, id: uuidv4() })
   }
   showApiDialog.value = false
+  ElMessage.success('API 配置已保存')
 }
 
 async function deleteApi(id: string) {
   await configStore.removeApiConfig(id)
+  ElMessage.success('API 配置已删除')
 }
 
 const showCharDialog = ref(false)
@@ -468,6 +471,7 @@ async function saveChar() {
     await configStore.addCharacter({ ...charForm, id: uuidv4() })
   }
   showCharDialog.value = false
+  ElMessage.success('角色配置已保存')
 }
 
 const watchFolderRows = computed(() => configStore.config.watchFolders.map((path) => ({ path })))
@@ -484,6 +488,7 @@ async function addWatchFolder() {
 async function removeWatchFolder(index: number) {
   const next = configStore.config.watchFolders.filter((_, i) => i !== index)
   await configStore.setConfig('watchFolders', next)
+  ElMessage.success('已移除监听文件夹')
 }
 
 async function selectLive2DModel() {
@@ -545,6 +550,7 @@ async function saveLive2DActionMap() {
     expression: rowsToMap(expressionRows.value),
     motion: rowsToMap(motionRows.value),
   })
+  ElMessage.success('映射表已保存')
 }
 
 async function saveHotkeys() {
@@ -570,10 +576,12 @@ async function saveHotkeys() {
 async function saveTriggerPrompts() {
   await configStore.setConfig('triggerPrompts', { ...configStore.config.triggerPrompts })
   await configStore.setConfig('randomTimerRange', { ...configStore.config.randomTimerRange })
+  ElMessage.success('唤起提示词已保存')
 }
 
 async function saveAgentChainConfig() {
   await configStore.setConfig('agentChain', { ...configStore.config.agentChain })
+  ElMessage.success('工作链配置已保存')
 }
 
 const toolList = ref<ToolDefinition[]>([])
@@ -603,9 +611,11 @@ const memoryGroups = computed<MemoryGroupRow[]>(() => {
 })
 
 async function loadTools() {
+  const api = getElectronAPIOrNotify()
+  if (!api) return
   toolsLoading.value = true
   try {
-    toolList.value = await window.electronAPI.tools.list()
+    toolList.value = await api.tools.list()
   } finally {
     toolsLoading.value = false
   }
@@ -628,6 +638,7 @@ async function saveWebSearchConfig() {
     allowDomains: parseDomainInput(searchAllowDomainsInput.value),
     blockDomains: parseDomainInput(searchBlockDomainsInput.value),
   })
+  ElMessage.success('搜索规则已保存')
 }
 
 function formatTime(ts: number) {
@@ -641,34 +652,44 @@ function formatTime(ts: number) {
 }
 
 async function loadMemories() {
+  const api = getElectronAPIOrNotify()
+  if (!api) return
   memoriesLoading.value = true
   try {
-    memoryRows.value = await window.electronAPI.memory.list()
+    memoryRows.value = await api.memory.list()
   } finally {
     memoriesLoading.value = false
   }
 }
 
 async function deleteMemory(id: string) {
-  await window.electronAPI.memory.delete(id)
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  await api.memory.delete(id)
   await loadMemories()
 }
 
 async function clearMemories() {
-  await window.electronAPI.memory.clear()
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  await api.memory.clear()
   await loadMemories()
+  ElMessage.success('记忆已清空')
 }
 
 async function mergeMemoryGroup(ids: string[]) {
   if (!ids || ids.length < 2) return
-  await window.electronAPI.memory.merge(ids)
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  await api.memory.merge(ids)
   await loadMemories()
+  ElMessage.success('记忆碎片已合并')
 }
 
 function hideSettings() {
   const api = getElectronAPIOrNotify()
   if (!api) return
-  api.window.showChat()
+  api.window.showLive2D()
   api.window.close()
 }
 

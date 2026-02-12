@@ -57,6 +57,40 @@ class Application {
     return { applied: '', warnings }
   }
 
+  private normalizeHotkey(input: string, fallback: string): string {
+    const raw = (input || '').trim()
+    if (!raw) return fallback
+    return raw
+      .replace(/\s+/g, '')
+      .replace(/\b(ctrl|control)\b/gi, 'CommandOrControl')
+      .replace(/\bcmd\b/gi, 'Command')
+      .replace(/\boption\b/gi, 'Alt')
+  }
+
+  private toIPCData<T>(value: T): T {
+    try {
+      return structuredClone(value)
+    } catch {
+      return JSON.parse(
+        JSON.stringify(value, (_key, item) => {
+          if (typeof item === 'bigint') return Number(item)
+          if (Buffer.isBuffer(item)) return item.toString('utf8')
+          if (typeof item === 'function' || typeof item === 'symbol') return undefined
+          return item
+        })
+      ) as T
+    }
+  }
+
+  private async discoverPluginTools() {
+    const pluginDir = path.join(app.getPath('userData'), 'tools')
+    const discovery = await this.toolManager.discoverTools(pluginDir)
+    if (discovery.errors.length > 0) {
+      console.warn('[ToolManager] 插件加载告警:', discovery.errors)
+    }
+    console.log(`[ToolManager] 已加载工具 ${this.toolManager.count} 个（插件新增 ${discovery.loaded} 个）`)
+  }
+
   async init() {
     await app.whenReady()
     app.setAppUserModelId('com.dice.aibot')
@@ -69,12 +103,6 @@ class Application {
     this.fileWatcher = new FileWatcher()
 
     this.toolManager.registerBuiltinTools()
-    const pluginDir = path.join(app.getPath('userData'), 'tools')
-    const discovery = await this.toolManager.discoverTools(pluginDir)
-    if (discovery.errors.length > 0) {
-      console.warn('[ToolManager] 插件加载告警:', discovery.errors)
-    }
-    console.log(`[ToolManager] 已加载工具 ${this.toolManager.count} 个（插件新增 ${discovery.loaded} 个）`)
 
     this.createMainWindow()
     this.createChatWindow()
@@ -84,6 +112,7 @@ class Application {
     this.registerIPCHandlers()
     this.startFileWatcher()
     this.startRandomTimer()
+    void this.discoverPluginTools().catch((error) => console.error('[ToolManager] 插件加载失败:', error))
 
     app.on('before-quit', () => {
       this.isQuitting = true
@@ -234,13 +263,11 @@ class Application {
     const config = this.configManager.getAll()
     globalShortcut.unregisterAll()
 
-    const chatHotkey = config.hotkeys.toggleChat || 'CommandOrControl+Shift+A'
-    const live2dHotkey = config.hotkeys.toggleLive2D || 'CommandOrControl+Shift+L'
+    const chatHotkey = this.normalizeHotkey(config.hotkeys.toggleChat, 'CommandOrControl+Shift+A')
+    const live2dHotkey = this.normalizeHotkey(config.hotkeys.toggleLive2D, 'CommandOrControl+Shift+L')
 
     const chatHandler = () => {
       this.toggleChatWindow()
-      const ctx: InvokeContext = { trigger: 'hotkey' }
-      this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
     }
     const live2dHandler = () => this.toggleLive2DWindow()
 
@@ -286,6 +313,15 @@ class Application {
     } else {
       this.live2dWindow.show()
     }
+  }
+
+  private showLive2DWindow() {
+    if (!this.live2dWindow) return
+    if (!this.live2dWindow.isVisible()) {
+      this.live2dWindow.show()
+    }
+    this.live2dWindow.focus()
+    this.live2dWindow.setIgnoreMouseEvents(false)
   }
 
   private restartFileWatcher() {
@@ -358,27 +394,31 @@ class Application {
     })
     ipcMain.handle(IPC_CHANNELS.CONFIG_GET_ALL, () => this.configManager.getAll())
 
-    ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_e, messages, apiConfigId, model) => {
-      return this.aiEngine.chat(messages, apiConfigId, model)
-    })
+    ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_e, messages, apiConfigId, model) =>
+      this.toIPCData(await this.aiEngine.chat(messages, apiConfigId, model))
+    )
     ipcMain.handle(IPC_CHANNELS.CHAT_ABORT, () => this.aiEngine.abort())
-    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_LIST, () => this.conversationManager.list())
-    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_GET, (_e, id: string) => this.conversationManager.get(id))
-    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_CREATE, (_e, conversation) => this.conversationManager.create(conversation))
-    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_SAVE, (_e, conversation) => this.conversationManager.save(conversation))
+    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_LIST, () => this.toIPCData(this.conversationManager.list()))
+    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_GET, (_e, id: string) => this.toIPCData(this.conversationManager.get(id)))
+    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_CREATE, (_e, conversation) =>
+      this.toIPCData(this.conversationManager.create(conversation))
+    )
+    ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_SAVE, (_e, conversation) =>
+      this.toIPCData(this.conversationManager.save(conversation))
+    )
     ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_DELETE, (_e, id: string) => this.conversationManager.delete(id))
 
-    ipcMain.handle(IPC_CHANNELS.MEMORY_LIST, () => this.memoryManager.list())
+    ipcMain.handle(IPC_CHANNELS.MEMORY_LIST, () => this.toIPCData(this.memoryManager.list()))
     ipcMain.handle(IPC_CHANNELS.MEMORY_DELETE, (_e, id: string) => this.memoryManager.delete(id))
     ipcMain.handle(IPC_CHANNELS.MEMORY_CLEAR, () => this.memoryManager.clear())
     ipcMain.handle(IPC_CHANNELS.MEMORY_MERGE, (_e, ids: string[]) =>
       this.memoryManager.merge(ids, this.configManager.getAll().agentChain.memoryMaxItems)
     )
 
-    ipcMain.handle(IPC_CHANNELS.TOOL_EXECUTE, async (_e, name: string, args: Record<string, unknown>) => {
-      return this.toolManager.execute(name, args)
-    })
-    ipcMain.handle(IPC_CHANNELS.TOOL_LIST, () => this.toolManager.getToolDefinitions())
+    ipcMain.handle(IPC_CHANNELS.TOOL_EXECUTE, async (_e, name: string, args: Record<string, unknown>) =>
+      this.toIPCData(await this.toolManager.execute(name, args))
+    )
+    ipcMain.handle(IPC_CHANNELS.TOOL_LIST, () => this.toIPCData(this.toolManager.getToolDefinitions()))
 
     ipcMain.handle(IPC_CHANNELS.FILE_READ, async (_e, filePath: string) =>
       this.toolManager.execute('file_read', { path: filePath })
@@ -408,6 +448,7 @@ class Application {
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_CHAT, () => this.toggleChatWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_SHOW_CHAT, () => this.showChatWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_LIVE2D, () => this.toggleLive2DWindow())
+    ipcMain.handle(IPC_CHANNELS.WINDOW_SHOW_LIVE2D, () => this.showLive2DWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_OPEN_SETTINGS, () => {
       this.mainWindow?.show()
       this.mainWindow?.focus()
@@ -507,6 +548,7 @@ class Application {
     for (const p of candidates) {
       if (fs.existsSync(p)) return p
     }
+    console.warn('[Preload] 未找到匹配文件，回退默认路径:', candidates[0])
     return candidates[0]
   }
 

@@ -178,7 +178,7 @@ export const useChatStore = defineStore('chat', () => {
 
           const toolCalls = assistantMsg.toolCalls || []
           for (const toolCall of toolCalls) {
-            const result = await window.electronAPI.tools.execute(toolCall.name, toolCall.arguments)
+            const result = await (await getElectronAPI()).tools.execute(toolCall.name, toolCall.arguments)
             messages.value.push({
               id: uuidv4(),
               role: 'tool',
@@ -239,7 +239,7 @@ export const useChatStore = defineStore('chat', () => {
       if (context.trigger !== 'text_input' && config.live2dModelPath) {
         const lastAssistant = [...messages.value].reverse().find((m) => m.role === 'assistant')
         if (lastAssistant?.content) {
-          window.electronAPI.live2d.showReply(lastAssistant.content)
+          ;(await getElectronAPI()).live2d.showReply(lastAssistant.content)
         }
       }
     }

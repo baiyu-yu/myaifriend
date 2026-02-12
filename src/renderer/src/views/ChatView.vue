@@ -78,6 +78,7 @@ import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { useConfigStore } from '../stores/config'
 import type { InvokeContext } from '../../../common/types'
+import { ElMessage } from 'element-plus'
 
 const router = useRouter()
 const chatStore = useChatStore()
@@ -101,7 +102,12 @@ watch(
 onMounted(async () => {
   await configStore.loadConfig()
   await chatStore.initConversation()
-  window.electronAPI.on.triggerInvoke((context: InvokeContext) => {
+  const api = window.electronAPI
+  if (!api?.on?.triggerInvoke) {
+    ElMessage.error('桌面桥接不可用，请通过桌面应用启动。')
+    return
+  }
+  api.on.triggerInvoke((context: InvokeContext) => {
     chatStore.handleTrigger(context)
   })
 })
@@ -142,11 +148,21 @@ async function deleteConversation() {
 }
 
 function minimize() {
-  window.electronAPI.window.minimize()
+  const api = window.electronAPI
+  if (!api?.window?.minimize) {
+    ElMessage.error('窗口控制不可用')
+    return
+  }
+  api.window.minimize()
 }
 
 function close() {
-  window.electronAPI.window.close()
+  const api = window.electronAPI
+  if (!api?.window?.close) {
+    ElMessage.error('窗口控制不可用')
+    return
+  }
+  api.window.close()
 }
 
 function clearChat() {
