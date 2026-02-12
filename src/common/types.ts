@@ -82,6 +82,7 @@ export interface ToolDefinition {
   description: string
   parameters: Record<string, ToolParameter>
   required?: string[]
+  enabled?: boolean
 }
 
 export interface ToolParameter {
@@ -151,10 +152,20 @@ export interface AppConfig {
     allowDomains: string[]
     blockDomains: string[]
   }
+  toolToggles: Record<string, boolean>
+  memoryLayers: {
+    instinctEnabled: boolean
+    instinctMemories: string[]
+    subconsciousEnabled: boolean
+    activeRecallEnabled: boolean
+  }
   agentChain: {
     enableContextCompression: boolean
     compressionThresholdTokens: number
     compressionKeepRecentMessages: number
+    enableRoundSummary: boolean
+    roundSummaryTriggerTurns: number
+    roundSummaryHeadTurns: number
     enableMemory: boolean
     memoryTopK: number
     memoryMinScore: number

@@ -102,7 +102,10 @@ class Application {
     this.memoryManager = new MemoryManager()
     this.fileWatcher = new FileWatcher()
 
-    this.toolManager.registerBuiltinTools()
+    this.toolManager.registerBuiltinTools({
+      memoryManager: this.memoryManager,
+      conversationManager: this.conversationManager,
+    })
 
     this.createMainWindow()
     this.createChatWindow()
@@ -394,9 +397,10 @@ class Application {
     })
     ipcMain.handle(IPC_CHANNELS.CONFIG_GET_ALL, () => this.configManager.getAll())
 
-    ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_e, messages, apiConfigId, model) =>
-      this.toIPCData(await this.aiEngine.chat(messages, apiConfigId, model))
-    )
+    ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_e, messages, apiConfigId, model) => {
+      const tools = this.toolManager.getToolDefinitions().filter((tool) => tool.enabled !== false)
+      return this.toIPCData(await this.aiEngine.chat(messages, apiConfigId, model, 'premier', tools))
+    })
     ipcMain.handle(IPC_CHANNELS.CHAT_ABORT, () => this.aiEngine.abort())
     ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_LIST, () => this.toIPCData(this.conversationManager.list()))
     ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_GET, (_e, id: string) => this.toIPCData(this.conversationManager.get(id)))

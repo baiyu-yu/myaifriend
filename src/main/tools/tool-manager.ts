@@ -5,9 +5,14 @@ import { AppConfig, ToolDefinition, ToolResult } from '../../common/types'
 import { FileReadTool } from './builtin/file-read'
 import { FileWriteTool } from './builtin/file-write'
 import { FileListTool } from './builtin/file-list'
+import { FileInfoTool } from './builtin/file-info'
 import { OpenBrowserTool } from './builtin/open-browser'
 import { Live2DControlTool } from './builtin/live2d-control'
 import { WebSearchTool } from './builtin/web-search'
+import { MemorySearchTool } from './builtin/memory-search'
+import { ConversationSearchTool } from './builtin/conversation-search'
+import { MemoryManager } from '../ai/memory-manager'
+import { ConversationManager } from '../conversation-manager'
 
 export interface ITool {
   definition: ToolDefinition
@@ -30,13 +35,38 @@ export class ToolManager {
     this.tools.delete(name)
   }
 
-  registerBuiltinTools(): void {
+  private isToolEnabled(name: string): boolean {
+    const config = this.getConfig?.()
+    const toggles = config?.toolToggles
+    if (
+      config &&
+      config.memoryLayers &&
+      config.memoryLayers.activeRecallEnabled === false &&
+      (name === 'memory_search' || name === 'conversation_search')
+    ) {
+      return false
+    }
+    if (!toggles) return true
+    return toggles[name] !== false
+  }
+
+  registerBuiltinTools(options?: {
+    memoryManager?: MemoryManager
+    conversationManager?: ConversationManager
+  }): void {
     this.register(new FileReadTool())
     this.register(new FileWriteTool())
     this.register(new FileListTool())
+    this.register(new FileInfoTool())
     this.register(new OpenBrowserTool())
     this.register(new Live2DControlTool())
     this.register(new WebSearchTool(this.getConfig))
+    if (options?.memoryManager) {
+      this.register(new MemorySearchTool(options.memoryManager))
+    }
+    if (options?.conversationManager) {
+      this.register(new ConversationSearchTool(options.conversationManager))
+    }
   }
 
   /**
@@ -88,7 +118,10 @@ export class ToolManager {
   }
 
   getToolDefinitions(): ToolDefinition[] {
-    return Array.from(this.tools.values()).map((t) => t.definition)
+    return Array.from(this.tools.values()).map((t) => ({
+      ...t.definition,
+      enabled: this.isToolEnabled(t.definition.name),
+    }))
   }
 
   async execute(name: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -97,6 +130,13 @@ export class ToolManager {
       return {
         toolCallId: '',
         content: `工具 "${name}" 不存在`,
+        isError: true,
+      }
+    }
+    if (!this.isToolEnabled(name)) {
+      return {
+        toolCallId: '',
+        content: `工具 "${name}" 已在设置中禁用`,
         isError: true,
       }
     }

@@ -77,8 +77,34 @@
           <el-form-item label="保留最近消息数">
             <el-input-number v-model="configStore.config.agentChain.compressionKeepRecentMessages" :min="4" :max="40" />
           </el-form-item>
+          <el-form-item label="启用轮次摘要">
+            <el-switch v-model="configStore.config.agentChain.enableRoundSummary" />
+          </el-form-item>
+          <el-form-item label="轮次摘要触发阈值（轮）">
+            <el-input-number v-model="configStore.config.agentChain.roundSummaryTriggerTurns" :min="20" :max="500" :step="10" />
+          </el-form-item>
+          <el-form-item label="轮次摘要前段轮次">
+            <el-input-number v-model="configStore.config.agentChain.roundSummaryHeadTurns" :min="10" :max="300" :step="10" />
+          </el-form-item>
           <el-form-item label="启用长期记忆">
             <el-switch v-model="configStore.config.agentChain.enableMemory" />
+          </el-form-item>
+          <el-form-item label="启用本能层记忆">
+            <el-switch v-model="configStore.config.memoryLayers.instinctEnabled" />
+          </el-form-item>
+          <el-form-item label="本能层记忆（每行一条）">
+            <el-input
+              v-model="instinctMemoriesInput"
+              type="textarea"
+              :rows="4"
+              placeholder="例如：回答先给结论，再给步骤"
+            />
+          </el-form-item>
+          <el-form-item label="启用潜意识层记忆">
+            <el-switch v-model="configStore.config.memoryLayers.subconsciousEnabled" />
+          </el-form-item>
+          <el-form-item label="启用主动回忆层">
+            <el-switch v-model="configStore.config.memoryLayers.activeRecallEnabled" />
           </el-form-item>
           <el-form-item label="每次注入记忆条数">
             <el-input-number v-model="configStore.config.agentChain.memoryTopK" :min="1" :max="20" />
@@ -208,6 +234,14 @@
         <el-table :data="toolList" border stripe v-loading="toolsLoading">
           <el-table-column prop="name" label="工具名" width="200" />
           <el-table-column prop="description" label="描述" />
+          <el-table-column label="启用" width="96">
+            <template #default="{ row }">
+              <el-switch
+                :model-value="row.enabled !== false"
+                @update:model-value="toggleToolEnabled(row.name, Boolean($event))"
+              />
+            </template>
+          </el-table-column>
           <el-table-column label="参数" width="280">
             <template #default="{ row }">
               <el-tag v-for="(_, key) in row.parameters" :key="key" style="margin-right: 6px">{{ key }}</el-tag>
@@ -580,6 +614,10 @@ async function saveTriggerPrompts() {
 }
 
 async function saveAgentChainConfig() {
+  await configStore.setConfig('memoryLayers', {
+    ...configStore.config.memoryLayers,
+    instinctMemories: parseDomainInput(instinctMemoriesInput.value),
+  })
   await configStore.setConfig('agentChain', { ...configStore.config.agentChain })
   ElMessage.success('工作链配置已保存')
 }
@@ -590,6 +628,7 @@ const memoryRows = ref<MemoryRow[]>([])
 const memoriesLoading = ref(false)
 const searchAllowDomainsInput = ref('')
 const searchBlockDomainsInput = ref('')
+const instinctMemoriesInput = ref('')
 
 const memoryGroups = computed<MemoryGroupRow[]>(() => {
   const groupMap = new Map<string, MemoryGroupRow>()
@@ -621,6 +660,14 @@ async function loadTools() {
   }
 }
 
+async function toggleToolEnabled(name: string, enabled: boolean) {
+  const next = { ...(configStore.config.toolToggles || {}) }
+  next[name] = enabled
+  await configStore.setConfig('toolToggles', next)
+  await loadTools()
+  ElMessage.success(`工具 ${name} 已${enabled ? '启用' : '禁用'}`)
+}
+
 function parseDomainInput(value: string): string[] {
   return value
     .split(/\r?\n|,/)
@@ -631,6 +678,10 @@ function parseDomainInput(value: string): string[] {
 function syncSearchConfigInputs() {
   searchAllowDomainsInput.value = (configStore.config.webSearch.allowDomains || []).join('\n')
   searchBlockDomainsInput.value = (configStore.config.webSearch.blockDomains || []).join('\n')
+}
+
+function syncMemoryLayerInputs() {
+  instinctMemoriesInput.value = (configStore.config.memoryLayers.instinctMemories || []).join('\n')
 }
 
 async function saveWebSearchConfig() {
@@ -698,6 +749,7 @@ onMounted(async () => {
   syncActionMapRowsFromConfig()
   syncModelAssignmentsFromConfig()
   syncSearchConfigInputs()
+  syncMemoryLayerInputs()
   await loadTools()
   await loadMemories()
 })

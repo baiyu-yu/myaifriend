@@ -71,6 +71,10 @@ export class ConversationManager {
     this.saveAll(all)
   }
 
+  all(): Conversation[] {
+    return this.getAll()
+  }
+
   private getAll(): Conversation[] {
     const value = this.store.get('conversations')
     return Array.isArray(value) ? value : []

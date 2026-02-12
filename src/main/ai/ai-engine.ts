@@ -63,6 +63,10 @@ export function shouldCompressContext(messages: ChatMessage[], thresholdTokens: 
   return estimateTokens(messages) > thresholdTokens
 }
 
+function nonSystemTurnCount(messages: ChatMessage[]): number {
+  return messages.filter((m) => m.role !== 'system').length
+}
+
 export function injectMemorySystemPrompt(messages: ChatMessage[], memories: Array<{ text: string }>): ChatMessage[] {
   if (!memories.length) return messages
   const memoryPrompt = memories.map((item, index) => `${index + 1}. ${item.text}`).join('\n')
@@ -233,15 +237,41 @@ export class AIEngine {
     const allConfig = this.configManager.getAll()
     let working = [...messages]
 
+    if (allConfig.agentChain.enableRoundSummary) {
+      const triggerTurns = Math.max(20, allConfig.agentChain.roundSummaryTriggerTurns || 100)
+      const headTurns = Math.max(10, allConfig.agentChain.roundSummaryHeadTurns || 50)
+      const hasRoundSummary = working.some((m) => m.role === 'system' && m.content.includes('[轮次摘要]'))
+      if (!hasRoundSummary && nonSystemTurnCount(working) >= triggerTurns) {
+        working = await this.roundSummarizeContext(working, headTurns)
+      }
+    }
+
     if (allConfig.agentChain.enableMemory) {
+      if (allConfig.memoryLayers.instinctEnabled && allConfig.memoryLayers.instinctMemories.length > 0) {
+        const instinctPrompt = allConfig.memoryLayers.instinctMemories
+          .map((item, idx) => `${idx + 1}. ${item}`)
+          .join('\n')
+        working = [
+          {
+            id: `instinct-${Date.now()}`,
+            role: 'system',
+            content: `【本能层记忆】以下规则始终优先：\n${instinctPrompt}`,
+            timestamp: Date.now(),
+          },
+          ...working,
+        ]
+      }
+
       const latest = getLastUserMessage(working)?.content || ''
-      const memories = this.memoryManager.retrieve(
-        latest,
-        allConfig.agentChain.memoryTopK,
-        allConfig.agentChain.memoryMinScore,
-        allConfig.agentChain.memoryDeduplicate
-      )
-      working = injectMemorySystemPrompt(working, memories)
+      if (allConfig.memoryLayers.subconsciousEnabled) {
+        const memories = this.memoryManager.retrieve(
+          latest,
+          allConfig.agentChain.memoryTopK,
+          allConfig.agentChain.memoryMinScore,
+          allConfig.agentChain.memoryDeduplicate
+        )
+        working = injectMemorySystemPrompt(working, memories)
+      }
     }
 
     if (allConfig.agentChain.enableContextCompression) {
@@ -251,6 +281,59 @@ export class AIEngine {
     }
 
     return { taskType, messages: working }
+  }
+
+  private async roundSummarizeContext(messages: ChatMessage[], headTurns: number): Promise<ChatMessage[]> {
+    if (headTurns <= 0) return messages
+    let nonSystemCount = 0
+    let splitIndex = messages.length
+    for (let i = 0; i < messages.length; i += 1) {
+      if (messages[i].role !== 'system') {
+        nonSystemCount += 1
+      }
+      if (nonSystemCount >= headTurns) {
+        splitIndex = i + 1
+        break
+      }
+    }
+    if (splitIndex <= 0 || splitIndex >= messages.length) return messages
+
+    const head = messages.slice(0, splitIndex)
+    const tail = messages.slice(splitIndex)
+    const serialized = head
+      .map((m) => `[${m.role}] ${m.content}`)
+      .join('\n')
+      .slice(0, 12000)
+
+    let summaryText = '已对早期上下文进行轮次摘要。'
+    try {
+      const { apiConfig, modelName } = this.resolveModelRoute('context_compression')
+      if (apiConfig && modelName) {
+        const response = await this.requestChatCompletion(apiConfig, {
+          model: modelName,
+          messages: [
+            {
+              role: 'system',
+              content: '请将以下早期对话总结成结构化要点，重点保留用户偏好、约束、待办、已完成事项，100-180字。',
+            },
+            { role: 'user', content: serialized },
+          ],
+        })
+        summaryText = response.choices?.[0]?.message?.content || summaryText
+      }
+    } catch {
+      summaryText = `轮次摘要（降级）: ${serialized.slice(0, 220)}...`
+    }
+
+    return [
+      {
+        id: `round-summary-${Date.now()}`,
+        role: 'system',
+        content: `[轮次摘要] ${summaryText}`,
+        timestamp: Date.now(),
+      },
+      ...tail,
+    ]
   }
 
   private async compressContext(messages: ChatMessage[], keepRecentMessages: number): Promise<ChatMessage[]> {
