@@ -111,6 +111,7 @@ class Application {
 
   private createMainWindow() {
     const icon = this.resolveIconPath()
+    const preload = this.resolvePreloadPath()
     this.mainWindow = new BrowserWindow({
       width: 900,
       height: 700,
@@ -118,9 +119,10 @@ class Application {
       title: 'AI Bot - 设置',
       ...(icon ? { icon } : {}),
       webPreferences: {
-        preload: path.join(__dirname, '../preload/index.js'),
+        preload,
         contextIsolation: true,
         nodeIntegration: false,
+        sandbox: false,
       },
     })
 
@@ -140,6 +142,7 @@ class Application {
   private createChatWindow() {
     const config = this.configManager.getAll()
     const icon = this.resolveIconPath()
+    const preload = this.resolvePreloadPath()
     this.chatWindow = new BrowserWindow({
       width: config.window.chatWidth,
       height: config.window.chatHeight,
@@ -151,9 +154,10 @@ class Application {
       skipTaskbar: true,
       ...(icon ? { icon } : {}),
       webPreferences: {
-        preload: path.join(__dirname, '../preload/index.js'),
+        preload,
         contextIsolation: true,
         nodeIntegration: false,
+        sandbox: false,
       },
     })
 
@@ -170,6 +174,7 @@ class Application {
     const config = this.configManager.getAll()
     const hasModel = !!config.live2dModelPath
     const icon = this.resolveIconPath()
+    const preload = this.resolvePreloadPath()
     this.live2dWindow = new BrowserWindow({
       width: config.window.live2dWidth,
       height: config.window.live2dHeight,
@@ -182,10 +187,11 @@ class Application {
       hasShadow: false,
       ...(icon ? { icon } : {}),
       webPreferences: {
-        preload: path.join(__dirname, '../preload/index.js'),
+        preload,
         contextIsolation: true,
         nodeIntegration: false,
         webSecurity: false,
+        sandbox: false,
       },
     })
 
@@ -490,6 +496,18 @@ class Application {
       if (fs.existsSync(p)) return p
     }
     return null
+  }
+
+  private resolvePreloadPath(): string {
+    const candidates = [
+      path.join(__dirname, '../preload/index.js'),
+      path.join(app.getAppPath(), 'dist', 'main', 'preload', 'index.js'),
+      path.join(process.resourcesPath, 'app.asar', 'dist', 'main', 'preload', 'index.js'),
+    ]
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return p
+    }
+    return candidates[0]
   }
 
   private resolveNativeIcon() {
