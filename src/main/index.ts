@@ -94,6 +94,7 @@ class Application {
   async init() {
     await app.whenReady()
     app.setAppUserModelId('com.dice.aibot')
+    Menu.setApplicationMenu(null)
 
     this.configManager = new ConfigManager()
     this.conversationManager = new ConversationManager()
@@ -141,6 +142,21 @@ class Application {
     app.quit()
   }
 
+  private openMainRoute(route: 'cover' | 'settings') {
+    if (!this.mainWindow) return
+    const hash = route === 'settings' ? '' : 'cover'
+    if (process.env.NODE_ENV === 'development') {
+      const target = hash ? `http://localhost:5173/#/${hash}` : 'http://localhost:5173/#/'
+      this.mainWindow.loadURL(target)
+    } else {
+      this.mainWindow.loadFile(path.join(__dirname, '../../renderer/index.html'), {
+        ...(hash ? { hash } : {}),
+      })
+    }
+    this.mainWindow.show()
+    this.mainWindow.focus()
+  }
+
   private createMainWindow() {
     const icon = this.resolveIconPath()
     const preload = this.resolvePreloadPath()
@@ -149,6 +165,7 @@ class Application {
       height: 700,
       show: true,
       title: 'AI Bot - 设置',
+      autoHideMenuBar: true,
       ...(icon ? { icon } : {}),
       webPreferences: {
         preload,
@@ -159,10 +176,11 @@ class Application {
     })
 
     if (process.env.NODE_ENV === 'development') {
-      this.mainWindow.loadURL('http://localhost:5173')
+      this.mainWindow.loadURL('http://localhost:5173/#/cover')
     } else {
-      this.mainWindow.loadFile(path.join(__dirname, '../../renderer/index.html'))
+      this.mainWindow.loadFile(path.join(__dirname, '../../renderer/index.html'), { hash: 'cover' })
     }
+    this.mainWindow.setMenuBarVisibility(false)
 
     this.mainWindow.on('close', (e) => {
       if (this.isQuitting) return
@@ -184,6 +202,7 @@ class Application {
       alwaysOnTop: true,
       resizable: true,
       skipTaskbar: true,
+      autoHideMenuBar: true,
       ...(icon ? { icon } : {}),
       webPreferences: {
         preload,
@@ -217,6 +236,7 @@ class Application {
       resizable: false,
       skipTaskbar: true,
       hasShadow: false,
+      autoHideMenuBar: true,
       ...(icon ? { icon } : {}),
       webPreferences: {
         preload,
@@ -251,7 +271,7 @@ class Application {
     this.tray.setToolTip('AI Bot')
 
     const contextMenu = Menu.buildFromTemplate([
-      { label: '打开设置', click: () => this.mainWindow?.show() },
+      { label: '打开设置', click: () => this.openMainRoute('settings') },
       { label: '显示/隐藏对话窗口', click: () => this.toggleChatWindow() },
       { label: '显示/隐藏 Live2D', click: () => this.toggleLive2DWindow() },
       { type: 'separator' },
@@ -259,7 +279,7 @@ class Application {
     ])
 
     this.tray.setContextMenu(contextMenu)
-    this.tray.on('double-click', () => this.mainWindow?.show())
+    this.tray.on('double-click', () => this.openMainRoute('settings'))
   }
 
   private registerGlobalShortcuts(): { applied: { toggleChat: string; toggleLive2D: string }; warnings: string[] } {
@@ -360,16 +380,65 @@ class Application {
     }, 300)
   }
 
+  private isLikelyLive2DModelFile(filePath: string): boolean {
+    const lower = path.basename(filePath).toLowerCase()
+    return lower.endsWith('.model3.json') || lower.endsWith('.model.json')
+  }
+
+  private async findLive2DModelInFolder(folderPath: string, depth = 0): Promise<string | null> {
+    if (depth > 3) return null
+    const entries = await fs.promises.readdir(folderPath, { withFileTypes: true })
+    const files = entries.filter((e) => e.isFile()).map((e) => path.join(folderPath, e.name))
+    const model3 = files.find((f) => path.basename(f).toLowerCase().endsWith('.model3.json'))
+    if (model3) return model3
+    const model2 = files.find((f) => path.basename(f).toLowerCase().endsWith('.model.json'))
+    if (model2) return model2
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const hit = await this.findLive2DModelInFolder(path.join(folderPath, entry.name), depth + 1)
+      if (hit) return hit
+    }
+    return null
+  }
+
+  private async resolveLive2DModelPath(inputPath: string): Promise<string> {
+    const normalized = inputPath.trim()
+    if (!normalized) return ''
+    if (!fs.existsSync(normalized)) {
+      throw new Error('路径不存在')
+    }
+    const stat = await fs.promises.stat(normalized)
+    if (stat.isFile()) {
+      if (!this.isLikelyLive2DModelFile(normalized)) {
+        throw new Error('请选择 .model3.json 或 .model.json 模型文件')
+      }
+      return normalized
+    }
+    if (stat.isDirectory()) {
+      const modelPath = await this.findLive2DModelInFolder(normalized)
+      if (!modelPath) {
+        throw new Error('所选文件夹中未找到 Live2D 模型入口（.model3.json/.model.json）')
+      }
+      return modelPath
+    }
+    throw new Error('无效的模型路径')
+  }
+
   private registerIPCHandlers() {
     ipcMain.handle(IPC_CHANNELS.CONFIG_GET, (_e, key: string) => this.configManager.get(key))
-    ipcMain.handle(IPC_CHANNELS.CONFIG_SET, (_e, key: string, value: unknown) => {
-      this.configManager.set(key, value)
+    ipcMain.handle(IPC_CHANNELS.CONFIG_SET, async (_e, key: string, value: unknown) => {
+      let nextValue: unknown = value
+      if (key === 'live2dModelPath' && typeof value === 'string') {
+        nextValue = await this.resolveLive2DModelPath(value)
+      }
+      this.configManager.set(key, nextValue)
       let hotkeyResult:
         | { applied: { toggleChat: string; toggleLive2D: string }; warnings: string[] }
         | undefined
       if (key === 'live2dModelPath' && typeof value === 'string') {
-        if (value) {
-          this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, value)
+        const modelPath = String(nextValue || '')
+        if (modelPath) {
+          this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
           this.live2dWindow?.show()
         } else {
           this.live2dWindow?.hide()
@@ -454,8 +523,7 @@ class Application {
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_LIVE2D, () => this.toggleLive2DWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_SHOW_LIVE2D, () => this.showLive2DWindow())
     ipcMain.handle(IPC_CHANNELS.WINDOW_OPEN_SETTINGS, () => {
-      this.mainWindow?.show()
-      this.mainWindow?.focus()
+      this.openMainRoute('settings')
     })
     ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, (e) => {
       const window = BrowserWindow.fromWebContents(e.sender)

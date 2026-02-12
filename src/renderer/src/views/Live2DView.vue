@@ -31,7 +31,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { Application } from 'pixi.js'
-import { Live2DModel, MotionPriority } from 'pixi-live2d-display/cubism4'
+import { Live2DModel, MotionPriority } from 'pixi-live2d-display'
 import 'live2dcubismcore/live2dcubismcore.min.js'
 import type { Live2DAction } from '../../../common/types'
 import { useConfigStore } from '../stores/config'

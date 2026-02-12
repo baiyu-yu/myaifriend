@@ -135,7 +135,8 @@
           <el-form-item label="模型文件">
             <el-input v-model="configStore.config.live2dModelPath" placeholder="选择 .model3.json 文件" readonly>
               <template #append>
-                <el-button @click="selectLive2DModel">选择</el-button>
+                <el-button @click="selectLive2DModelFile">选文件</el-button>
+                <el-button @click="selectLive2DModelFolder">选文件夹</el-button>
               </template>
             </el-input>
           </el-form-item>
@@ -381,6 +382,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { v4 as uuidv4 } from 'uuid'
 import { useConfigStore } from '../stores/config'
 import { Back } from '@element-plus/icons-vue'
@@ -398,6 +400,7 @@ type MemoryRow = { id: string; sourceId: string; text: string; createdAt: number
 type MemoryGroupRow = { sourceId: string; count: number; preview: string; ids: string[] }
 
 const configStore = useConfigStore()
+const router = useRouter()
 const activeTab = ref('api')
 const fileChangeInfo = '{{fileChangeInfo}}'
 const taskTypeLabels = TASK_TYPE_LABELS
@@ -525,7 +528,7 @@ async function removeWatchFolder(index: number) {
   ElMessage.success('已移除监听文件夹')
 }
 
-async function selectLive2DModel() {
+async function selectLive2DModelFile() {
   const api = getElectronAPIOrNotify()
   if (!api) return
   const file = await api.dialog.selectFile([{ name: 'Live2D Model JSON', extensions: ['json'] }])
@@ -535,10 +538,24 @@ async function selectLive2DModel() {
   }
 }
 
+async function selectLive2DModelFolder() {
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  const folder = await api.dialog.selectFolder()
+  if (folder) {
+    configStore.config.live2dModelPath = folder
+    ElMessage.success('已选择 Live2D 模型文件夹')
+  }
+}
+
 async function saveLive2DConfig() {
-  await configStore.setConfig('live2dModelPath', configStore.config.live2dModelPath)
-  await configStore.setConfig('window', { ...configStore.config.window })
-  ElMessage.success('Live2D 配置已保存')
+  try {
+    await configStore.setConfig('live2dModelPath', configStore.config.live2dModelPath)
+    await configStore.setConfig('window', { ...configStore.config.window })
+    ElMessage.success('Live2D 配置已保存')
+  } catch (error) {
+    ElMessage.error(`Live2D 配置保存失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 const expressionRows = ref<MappingRow[]>([])
@@ -738,10 +755,7 @@ async function mergeMemoryGroup(ids: string[]) {
 }
 
 function hideSettings() {
-  const api = getElectronAPIOrNotify()
-  if (!api) return
-  api.window.showLive2D()
-  api.window.close()
+  router.push('/cover')
 }
 
 onMounted(async () => {
