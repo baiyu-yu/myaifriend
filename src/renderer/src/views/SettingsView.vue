@@ -5,9 +5,6 @@
         <el-icon><Back /></el-icon>
       </el-button>
       <el-page-header content="设置中心" icon="" title="" @back="hideSettings" />
-      <el-button text class="collapse-btn" @click="toggleTabsCollapsed">
-        {{ tabsCollapsed ? '展开菜单' : '收起菜单' }}
-      </el-button>
     </div>
 
     <el-tabs v-model="activeTab" tab-position="left" class="tabs" :class="{ collapsed: tabsCollapsed }">
@@ -400,6 +397,9 @@
         </el-form>
       </el-tab-pane>
     </el-tabs>
+    <el-button text class="side-collapse-btn" @click="toggleTabsCollapsed">
+      {{ tabsCollapsed ? '展开菜单' : '收起菜单' }}
+    </el-button>
 
     <el-dialog v-model="showApiDialog" :title="editingApi ? '编辑 API' : '新增 API'" width="520px">
       <el-form label-width="110px">
@@ -944,7 +944,10 @@ onBeforeUnmount(() => {
   max-width: 1200px;
   margin: 0 auto;
   height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(248, 250, 251, 0.82));
   border-radius: 18px;
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -959,11 +962,6 @@ onBeforeUnmount(() => {
   border-bottom: 1px dashed rgba(15, 23, 42, 0.12);
 }
 
-.collapse-btn {
-  margin-left: auto;
-  color: #0f766e;
-}
-
 .back-btn {
   font-size: 18px;
   background: linear-gradient(135deg, #e9f8f5 0%, #d7f2ed 100%);
@@ -973,7 +971,8 @@ onBeforeUnmount(() => {
 
 .tabs {
   margin-top: 14px;
-  min-height: calc(100vh - 170px);
+  min-height: 0;
+  flex: 1;
   background: rgba(255, 255, 255, 0.78);
   padding: 16px;
   border-radius: 14px;
@@ -981,15 +980,25 @@ onBeforeUnmount(() => {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
 
+:deep(.el-tabs) {
+  height: 100%;
+}
+
 :deep(.el-tabs__header) {
   margin-bottom: 0;
   margin-right: 12px;
   border-right: 1px solid rgba(15, 23, 42, 0.08);
   padding-right: 8px;
+  width: 220px;
+  height: 100%;
+  position: sticky;
+  top: 0;
+  flex: 0 0 220px;
+  align-self: stretch;
 }
 
 :deep(.el-tabs__nav-scroll) {
-  padding-bottom: 2px;
+  padding-bottom: 52px;
 }
 
 :deep(.el-tabs__item) {
@@ -1000,6 +1009,7 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   margin-right: 4px;
   transition: all 0.2s;
+  justify-content: flex-start;
 }
 
 :deep(.el-tabs__item:hover) {
@@ -1022,16 +1032,36 @@ onBeforeUnmount(() => {
   width: 3px;
 }
 
+.tabs :deep(.el-tabs__content) {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
 .tabs.collapsed :deep(.el-tabs__header) {
-  width: 48px;
+  width: 56px;
+  flex-basis: 56px;
 }
 
 .tabs.collapsed :deep(.el-tabs__item) {
-  width: 36px;
+  width: 44px;
   padding-left: 0;
   padding-right: 0;
   justify-content: center;
   font-size: 0;
+}
+
+.side-collapse-btn {
+  position: absolute;
+  left: 28px;
+  bottom: 18px;
+  color: #0f766e;
+  z-index: 30;
+}
+
+.tabs.collapsed + .side-collapse-btn {
+  left: 24px;
 }
 
 .card-header {
@@ -1143,10 +1173,25 @@ onBeforeUnmount(() => {
     border-radius: 0;
     border: none;
     box-shadow: none;
+    overflow: auto;
   }
 
   .tabs {
     padding: 10px;
+    overflow: visible;
+  }
+
+  :deep(.el-tabs__header) {
+    width: 168px;
+    flex-basis: 168px;
+    position: static;
+    height: auto;
+  }
+
+  .side-collapse-btn {
+    position: static;
+    margin-top: 8px;
+    align-self: flex-start;
   }
 
   :deep(.el-form-item) {

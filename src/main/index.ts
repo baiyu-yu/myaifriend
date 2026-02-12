@@ -286,6 +286,7 @@ class Application {
       show: false,
       frame: false,
       transparent: true,
+      backgroundColor: '#00000000',
       alwaysOnTop: true,
       resizable: false,
       skipTaskbar: true,
@@ -370,7 +371,7 @@ class Application {
     } else {
       this.chatWindow.show()
       this.chatWindow.focus()
-      this.live2dWindow?.setIgnoreMouseEvents(true, { forward: true })
+      this.live2dWindow?.setIgnoreMouseEvents(false)
     }
   }
 
@@ -380,7 +381,7 @@ class Application {
       this.chatWindow.show()
     }
     this.chatWindow.focus()
-    this.live2dWindow?.setIgnoreMouseEvents(true, { forward: true })
+    this.live2dWindow?.setIgnoreMouseEvents(false)
   }
 
   private toggleLive2DWindow() {
@@ -436,6 +437,16 @@ class Application {
 
   private isLikelyLive2DModelFile(filePath: string): boolean {
     const lower = path.basename(filePath).toLowerCase()
+    return (
+      lower.endsWith('.model3.json') ||
+      lower.endsWith('.model.json') ||
+      lower.endsWith('.vtube.json') ||
+      lower.endsWith('.prprl2d.json')
+    )
+  }
+
+  private isModelEntryFile(filePath: string): boolean {
+    const lower = path.basename(filePath).toLowerCase()
     return lower.endsWith('.model3.json') || lower.endsWith('.model.json')
   }
 
@@ -455,6 +466,33 @@ class Application {
     return null
   }
 
+  private async resolveCompanionModelPath(metaPath: string): Promise<string | null> {
+    const folder = path.dirname(metaPath)
+    const basenameLower = path.basename(metaPath).toLowerCase()
+
+    try {
+      const raw = await fs.promises.readFile(metaPath, 'utf-8')
+      const json = JSON.parse(raw)
+      const refs = json?.FileReferences || json?.fileReferences || {}
+      const candidates: string[] = []
+      const modelRef = String(refs?.Model || refs?.model || '').trim()
+      if (modelRef) candidates.push(path.resolve(folder, modelRef))
+      if (basenameLower.endsWith('.vtube.json') || basenameLower.endsWith('.prprl2d.json')) {
+        const stem = path.basename(metaPath).replace(/\.(vtube|prprl2d)\.json$/i, '')
+        candidates.push(path.join(folder, `${stem}.model3.json`))
+        candidates.push(path.join(folder, `${stem}.model.json`))
+      }
+      for (const filePath of candidates) {
+        if (this.isModelEntryFile(filePath) && fs.existsSync(filePath)) {
+          return filePath
+        }
+      }
+    } catch {
+      // ignore parse errors here, caller will fallback
+    }
+    return null
+  }
+
   private async resolveLive2DModelPath(inputPath: string): Promise<string> {
     const normalized = inputPath.trim()
     if (!normalized) return ''
@@ -464,9 +502,14 @@ class Application {
     const stat = await fs.promises.stat(normalized)
     if (stat.isFile()) {
       if (!this.isLikelyLive2DModelFile(normalized)) {
-        throw new Error('请选择 .model3.json 或 .model.json 模型文件')
+        throw new Error('请选择 Live2D 模型文件（.model3.json/.model.json/.vtube.json/.prprl2d.json）')
       }
-      return normalized
+      if (this.isModelEntryFile(normalized)) {
+        return normalized
+      }
+      const companion = await this.resolveCompanionModelPath(normalized)
+      if (companion) return companion
+      throw new Error('无法从所选配置文件定位到 .model3.json/.model.json 模型入口')
     }
     if (stat.isDirectory()) {
       const modelPath = await this.findLive2DModelInFolder(normalized)
@@ -487,6 +530,8 @@ class Application {
       const json = JSON.parse(raw)
       const expression: Record<string, string> = {}
       const motion: Record<string, string> = {}
+      const modelDir = path.dirname(modelPath)
+      const modelStem = path.basename(modelPath).replace(/\.(model3|model)\.json$/i, '')
       const pickNameFromFile = (filePath: unknown): string => {
         const file = String(filePath || '').trim()
         if (!file) return ''
@@ -520,8 +565,69 @@ class Application {
         }
       }
 
+      const readCompanionActions = async (companionPath: string) => {
+        if (!fs.existsSync(companionPath)) return
+        try {
+          const rawCompanion = await fs.promises.readFile(companionPath, 'utf-8')
+          const parsed = JSON.parse(rawCompanion)
+
+          const hotkeys = Array.isArray(parsed?.Hotkeys) ? parsed.Hotkeys : []
+          for (const item of hotkeys) {
+            const actionType = String(item?.Action || item?.action || '').trim().toLowerCase()
+            const name = String(item?.Name || item?.name || '').trim() || pickNameFromFile(item?.File || item?.file)
+            if (!name) continue
+            if (actionType.includes('expression')) {
+              expression[name] = name
+            } else {
+              motion[name] = name
+            }
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          this.addRuntimeLog('warn', `Live2D 伴随配置解析失败: ${companionPath} | ${message}`, 'live2d')
+        }
+      }
+
+      await readCompanionActions(path.join(modelDir, `${modelStem}.vtube.json`))
+      await readCompanionActions(path.join(modelDir, `${modelStem}.prprl2d.json`))
+
+      const collectFiles = async (folder: string, matcher: RegExp, depth = 0): Promise<string[]> => {
+        if (depth > 3) return []
+        const result: string[] = []
+        const entries = await fs.promises.readdir(folder, { withFileTypes: true })
+        for (const entry of entries) {
+          const fullPath = path.join(folder, entry.name)
+          if (entry.isDirectory()) {
+            result.push(...(await collectFiles(fullPath, matcher, depth + 1)))
+            continue
+          }
+          if (entry.isFile() && matcher.test(entry.name)) {
+            result.push(fullPath)
+          }
+        }
+        return result
+      }
+
+      if (Object.keys(expression).length === 0) {
+        const expressionFiles = await collectFiles(modelDir, /\.exp3\.json$/i)
+        for (const filePath of expressionFiles) {
+          const name = pickNameFromFile(filePath)
+          if (name) expression[name] = name
+        }
+      }
+
+      if (Object.keys(motion).length === 0) {
+        const motionFiles = await collectFiles(modelDir, /\.(motion3\.json|mtn)$/i)
+        for (const filePath of motionFiles) {
+          const name = pickNameFromFile(filePath)
+          if (name) motion[name] = name
+        }
+      }
+
       return { expression, motion }
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.addRuntimeLog('error', `Live2D 映射解析失败: ${modelPath} | ${message}`, 'live2d')
       return { expression: {}, motion: {} }
     }
   }

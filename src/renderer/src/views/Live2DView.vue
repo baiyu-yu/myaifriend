@@ -1,9 +1,7 @@
 <template>
-  <div class="live2d-container" @click="handleClick">
+  <div class="live2d-container">
     <div class="drag-bar" @click.stop />
-    <canvas ref="canvasRef" />
-    <div v-if="statusText && hasModel" class="status">{{ statusText }}</div>
-    <div v-if="errorText" class="error">{{ errorText }}</div>
+    <canvas ref="canvasRef" @click="handleClick" />
 
     <div v-if="replyText" class="reply-bubble" @click.stop>
       <div class="reply-content">{{ replyText }}</div>
@@ -23,10 +21,7 @@ import type { Live2DAction } from '../../../common/types'
 import { useConfigStore } from '../stores/config'
 
 const canvasRef = ref<HTMLCanvasElement>()
-const statusText = ref('')
-const errorText = ref('')
 const replyText = ref('')
-const hasModel = ref(false)
 
 const configStore = useConfigStore()
 const cleanups: Array<() => void> = []
@@ -78,9 +73,6 @@ async function loadModel(modelPath: string) {
   const url = toModelUrl(modelPath)
   if (!url) return
 
-  statusText.value = '正在加载 Live2D 模型...'
-  errorText.value = ''
-
   try {
     if (currentModel) {
       pixiApp.stage.removeChild(currentModel as any)
@@ -92,14 +84,10 @@ async function loadModel(modelPath: string) {
     currentModel = model
     pixiApp.stage.addChild(model as any)
     fitModel(model)
-    hasModel.value = true
-    statusText.value = ''
     void window.electronAPI.app.log.add('info', `Live2D 模型加载成功: ${modelPath}`, 'live2d')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    errorText.value = `模型加载失败: ${message}`
-    statusText.value = ''
-    hasModel.value = false
+    void window.electronAPI.app.log.add('warn', `Live2D 模型加载异常详情: ${message}`, 'live2d')
     void window.electronAPI.app.log.add(
       'error',
       `Live2D 模型加载失败: ${modelPath} | ${message}`,
@@ -173,6 +161,8 @@ function handleClick(event: MouseEvent) {
 onMounted(async () => {
   if (!canvasRef.value) return
 
+  document.body.classList.add('live2d-page')
+
   pixiApp = new Application({
     view: canvasRef.value,
     backgroundAlpha: 0,
@@ -217,6 +207,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  document.body.classList.remove('live2d-page')
+
   for (const off of cleanups) off()
 
   if (pixiApp && idleTicker) {
@@ -245,8 +237,8 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  cursor: pointer;
   background: transparent;
+  -webkit-app-region: drag;
 }
 
 .drag-bar {
@@ -254,40 +246,17 @@ onBeforeUnmount(() => {
   left: 0;
   top: 0;
   width: 100%;
-  height: 28px;
+  height: 34px;
   z-index: 900;
   -webkit-app-region: drag;
+  cursor: move;
 }
 
 canvas {
   width: 100%;
   height: 100%;
   display: block;
-}
-
-.status {
-  position: absolute;
-  left: 10px;
-  bottom: 10px;
-  color: #fff;
-  background: rgba(15, 23, 42, 0.58);
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 12px;
-}
-
-.error {
-  position: absolute;
-  left: 10px;
-  top: 10px;
-  max-width: 90%;
-  color: #fff;
-  background: rgba(176, 38, 38, 0.88);
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
+  -webkit-app-region: no-drag;
 }
 
 .reply-bubble {
@@ -298,6 +267,7 @@ canvas {
   max-width: 90%;
   z-index: 100;
   animation: fadeIn 0.3s ease;
+  -webkit-app-region: no-drag;
 }
 
 .reply-content {
