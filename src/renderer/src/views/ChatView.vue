@@ -69,11 +69,20 @@
         发送
       </button>
     </div>
+
+    <div class="resize-handle top" @mousedown.stop.prevent="startResizeWindow('top', $event)" />
+    <div class="resize-handle right" @mousedown.stop.prevent="startResizeWindow('right', $event)" />
+    <div class="resize-handle bottom" @mousedown.stop.prevent="startResizeWindow('bottom', $event)" />
+    <div class="resize-handle left" @mousedown.stop.prevent="startResizeWindow('left', $event)" />
+    <div class="resize-handle top-left" @mousedown.stop.prevent="startResizeWindow('top-left', $event)" />
+    <div class="resize-handle top-right" @mousedown.stop.prevent="startResizeWindow('top-right', $event)" />
+    <div class="resize-handle bottom-left" @mousedown.stop.prevent="startResizeWindow('bottom-left', $event)" />
+    <div class="resize-handle bottom-right" @mousedown.stop.prevent="startResizeWindow('bottom-right', $event)" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useChatStore } from '../stores/chat'
 import { useConfigStore } from '../stores/config'
@@ -87,6 +96,17 @@ const configStore = useConfigStore()
 const messagesContainer = ref<HTMLElement>()
 const inputRef = ref<HTMLTextAreaElement>()
 const conversationTitle = ref('')
+let resizingEdge:
+  | 'top'
+  | 'right'
+  | 'bottom'
+  | 'left'
+  | 'top-left'
+  | 'top-right'
+  | 'bottom-left'
+  | 'bottom-right'
+  | null = null
+let removeResizeListeners: (() => void) | null = null
 
 const characterName = computed(() => configStore.activeCharacter?.name || 'AI 助手')
 const visibleMessages = computed(() => chatStore.messages.filter((m) => m.role !== 'system'))
@@ -172,6 +192,48 @@ function clearChat() {
 function backToHome() {
   router.push('/live2d')
 }
+
+function bindResizeListeners() {
+  const onMove = (event: MouseEvent) => {
+    if (!resizingEdge) return
+    void window.electronAPI.window.resizeUpdate(event.screenX, event.screenY)
+  }
+  const onUp = () => {
+    if (resizingEdge) {
+      resizingEdge = null
+      void window.electronAPI.window.resizeEnd()
+    }
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+  removeResizeListeners = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+}
+
+function startResizeWindow(
+  edge: 'top' | 'right' | 'bottom' | 'left' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
+  event: MouseEvent
+) {
+  if (event.button !== 0) return
+  resizingEdge = edge
+  void window.electronAPI.window.resizeBegin(edge, event.screenX, event.screenY)
+  bindResizeListeners()
+}
+
+onBeforeUnmount(() => {
+  if (resizingEdge) {
+    resizingEdge = null
+    void window.electronAPI.window.resizeEnd()
+  }
+  if (removeResizeListeners) {
+    removeResizeListeners()
+    removeResizeListeners = null
+  }
+})
 </script>
 
 <style scoped>
@@ -179,11 +241,84 @@ function backToHome() {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  position: relative;
   background: linear-gradient(180deg, rgba(252, 255, 255, 0.96), rgba(244, 248, 249, 0.98));
   border-radius: 16px;
   overflow: hidden;
   border: 1px solid rgba(15, 23, 42, 0.12);
   box-shadow: 0 14px 34px rgba(15, 23, 42, 0.16);
+}
+
+.resize-handle {
+  position: absolute;
+  z-index: 25;
+  -webkit-app-region: no-drag;
+}
+
+.resize-handle.top,
+.resize-handle.bottom {
+  left: 10px;
+  right: 10px;
+  height: 6px;
+}
+
+.resize-handle.left,
+.resize-handle.right {
+  top: 10px;
+  bottom: 10px;
+  width: 6px;
+}
+
+.resize-handle.top {
+  top: 0;
+  cursor: ns-resize;
+}
+
+.resize-handle.right {
+  right: 0;
+  cursor: ew-resize;
+}
+
+.resize-handle.bottom {
+  bottom: 0;
+  cursor: ns-resize;
+}
+
+.resize-handle.left {
+  left: 0;
+  cursor: ew-resize;
+}
+
+.resize-handle.top-left,
+.resize-handle.top-right,
+.resize-handle.bottom-left,
+.resize-handle.bottom-right {
+  width: 10px;
+  height: 10px;
+}
+
+.resize-handle.top-left {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.resize-handle.top-right {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.resize-handle.bottom-left {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.resize-handle.bottom-right {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
 }
 
 .chat-messages {

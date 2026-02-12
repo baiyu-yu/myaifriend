@@ -1,17 +1,48 @@
 <template>
   <div class="live2d-container">
-    <div class="drag-bar" @click.stop />
+    <div class="drag-bar" @click.stop @mousedown.stop="startDragWindow" />
     <canvas ref="canvasRef" @click="handleClick" />
 
     <div v-if="replyText" class="reply-bubble" @click.stop>
       <div class="reply-content">{{ replyText }}</div>
     </div>
 
+    <div class="control-toggle" @click.stop @mousedown.stop>
+      <button type="button" class="control-toggle-btn" @click="toggleControlPanel">
+        {{ showControlPanel ? '收起' : '动作' }}
+      </button>
+    </div>
+
+    <div v-if="showControlPanel" class="control-panel" @click.stop @mousedown.stop>
+      <div class="control-row">
+        <select v-model="selectedExpression">
+          <option value="">选择表情</option>
+          <option v-for="item in expressionOptions" :key="`exp-${item}`" :value="item">{{ item }}</option>
+        </select>
+        <button type="button" @click="triggerExpressionManually">触发表情</button>
+      </div>
+      <div class="control-row">
+        <select v-model="selectedMotion">
+          <option value="">选择动作</option>
+          <option v-for="item in motionOptions" :key="`mot-${item}`" :value="item">{{ item }}</option>
+        </select>
+        <button type="button" @click="triggerMotionManually">触发动作</button>
+      </div>
+    </div>
+
+    <div class="resize-handle top" @mousedown.stop.prevent="startResizeWindow('top', $event)" />
+    <div class="resize-handle right" @mousedown.stop.prevent="startResizeWindow('right', $event)" />
+    <div class="resize-handle bottom" @mousedown.stop.prevent="startResizeWindow('bottom', $event)" />
+    <div class="resize-handle left" @mousedown.stop.prevent="startResizeWindow('left', $event)" />
+    <div class="resize-handle top-left" @mousedown.stop.prevent="startResizeWindow('top-left', $event)" />
+    <div class="resize-handle top-right" @mousedown.stop.prevent="startResizeWindow('top-right', $event)" />
+    <div class="resize-handle bottom-left" @mousedown.stop.prevent="startResizeWindow('bottom-left', $event)" />
+    <div class="resize-handle bottom-right" @mousedown.stop.prevent="startResizeWindow('bottom-right', $event)" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as PIXI from 'pixi.js'
 import cubismCoreRuntimeUrl from 'live2dcubismcore/live2dcubismcore.min.js?url'
 import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4'
@@ -20,6 +51,11 @@ import { useConfigStore } from '../stores/config'
 
 const canvasRef = ref<HTMLCanvasElement>()
 const replyText = ref('')
+const selectedExpression = ref('')
+const selectedMotion = ref('')
+const expressionOptions = ref<string[]>([])
+const motionOptions = ref<string[]>([])
+const showControlPanel = ref(false)
 
 const configStore = useConfigStore()
 const cleanups: Array<() => void> = []
@@ -35,6 +71,31 @@ let live2DModelCtor: typeof import('pixi-live2d-display/cubism4').Live2DModel | 
 let motionPriorityNormal = 2
 let motionPriorityForce = 3
 const runtimeScriptTasks = new Map<string, Promise<boolean>>()
+const logDedupCache = new Map<string, number>()
+const behaviorState = ref({
+  enableIdleSway: true,
+  idleSwayAmplitude: 8,
+  idleSwaySpeed: 0.8,
+  enableEyeTracking: false,
+})
+let focusTargetX = window.innerWidth / 2
+let focusTargetY = window.innerHeight * 0.45
+let focusCurrentX = focusTargetX
+let focusCurrentY = focusTargetY
+let trackingMouseInside = false
+let draggingWindow = false
+let resizingEdge:
+  | 'top'
+  | 'right'
+  | 'bottom'
+  | 'left'
+  | 'top-left'
+  | 'top-right'
+  | 'bottom-left'
+  | 'bottom-right'
+  | null = null
+let lastInteractionState = ''
+let removeDragResizeListeners: (() => void) | null = null
 
 function describeError(error: unknown): string {
   if (error instanceof Error) {
@@ -45,7 +106,44 @@ function describeError(error: unknown): string {
 }
 
 function logLive2D(level: 'info' | 'warn' | 'error', message: string) {
+  const key = `${level}:${message}`
+  const now = Date.now()
+  const last = logDedupCache.get(key) || 0
+  if (level === 'info' && now - last < 1200) return
+  logDedupCache.set(key, now)
   void window.electronAPI.app.log.add(level, message, 'live2d')
+}
+
+function sanitizeBehavior(input: any) {
+  return {
+    enableIdleSway: input?.enableIdleSway !== false,
+    idleSwayAmplitude: Math.max(0, Number(input?.idleSwayAmplitude ?? 8) || 0),
+    idleSwaySpeed: Math.max(0.05, Number(input?.idleSwaySpeed ?? 0.8) || 0.8),
+    enableEyeTracking: Boolean(input?.enableEyeTracking),
+  }
+}
+
+function applyBehavior(input: any, source: string) {
+  behaviorState.value = sanitizeBehavior(input)
+  logLive2D(
+    'info',
+    `Live2D 行为参数已更新: source=${source}, sway=${behaviorState.value.enableIdleSway}, amp=${behaviorState.value.idleSwayAmplitude}, speed=${behaviorState.value.idleSwaySpeed}, eye=${behaviorState.value.enableEyeTracking}`
+  )
+}
+
+function syncActionOptionsFromConfig() {
+  const expMap = configStore.config.live2dActionMap?.expression || {}
+  const motMap = configStore.config.live2dActionMap?.motion || {}
+  const exp = new Set<string>([...Object.keys(expMap), ...Object.values(expMap)])
+  const mot = new Set<string>([...Object.keys(motMap), ...Object.values(motMap)])
+  expressionOptions.value = Array.from(exp).filter(Boolean)
+  motionOptions.value = Array.from(mot).filter(Boolean)
+  if (!selectedExpression.value && expressionOptions.value.length > 0) {
+    selectedExpression.value = expressionOptions.value[0]
+  }
+  if (!selectedMotion.value && motionOptions.value.length > 0) {
+    selectedMotion.value = motionOptions.value[0]
+  }
 }
 
 function ensureInteractionManagerCompat(manager: any): void {
@@ -83,20 +181,30 @@ function ensureInteractionManagerCompat(manager: any): void {
 function patchRendererInteractionManager(reason: string): void {
   const manager = (pixiApp as any)?.renderer?.plugins?.interaction
   if (!manager) {
-    logLive2D('warn', `Live2D interaction manager 不存在: reason=${reason}`)
+    if (lastInteractionState !== 'none') {
+      logLive2D('warn', `Live2D interaction manager 不存在: reason=${reason}`)
+      lastInteractionState = 'none'
+    }
     return
   }
   const hasOn = typeof manager.on === 'function'
   const hasOff = typeof manager.off === 'function'
   if (!hasOn || !hasOff) {
     ensureInteractionManagerCompat(manager)
-    logLive2D(
-      'warn',
-      `Live2D interaction manager 已做兼容补丁: reason=${reason}, before(on=${hasOn},off=${hasOff}), after(on=${typeof manager.on === 'function'},off=${typeof manager.off === 'function'})`
-    )
+    const nextState = `patched:on=${typeof manager.on === 'function'},off=${typeof manager.off === 'function'}`
+    if (lastInteractionState !== nextState) {
+      logLive2D(
+        'warn',
+        `Live2D interaction manager 已做兼容补丁: reason=${reason}, before(on=${hasOn},off=${hasOff}), after(on=${typeof manager.on === 'function'},off=${typeof manager.off === 'function'})`
+      )
+      lastInteractionState = nextState
+    }
     return
   }
-  logLive2D('info', `Live2D interaction manager 可用: reason=${reason}, on/off 已存在`)
+  if (lastInteractionState !== 'ready') {
+    logLive2D('info', `Live2D interaction manager 可用: reason=${reason}, on/off 已存在`)
+    lastInteractionState = 'ready'
+  }
 }
 
 function destroyCurrentModelSafely(reason: string): void {
@@ -237,7 +345,9 @@ function fitModel(model: Live2DModelType, reason = 'fit') {
   model.y = stageHeight - 6
   baseX = model.x
   baseRotation = model.rotation
-  if (reason !== 'resize') {
+  const shouldLog =
+    reason === 'initial' || reason === 'retry-900ms' || reason === 'resize' || reason === 'fit'
+  if (shouldLog) {
     logLive2D(
       'info',
       `Live2D 模型布局完成: reason=${reason}, stage=${stageWidth}x${stageHeight}, model=${modelWidth.toFixed(1)}x${modelHeight.toFixed(1)}, scale=${scale.toFixed(3)}, pos=(${model.x.toFixed(1)},${model.y.toFixed(1)})`
@@ -405,13 +515,22 @@ function handleResize() {
   if (!pixiApp || !currentModel) return
   pixiApp.renderer.resize(window.innerWidth, window.innerHeight)
   fitModel(currentModel, 'resize')
+  focusTargetX = window.innerWidth / 2
+  focusTargetY = window.innerHeight * 0.45
 }
 
 function handleMouseMove(event: MouseEvent) {
-  if (!currentModel) return
-  if (configStore.config.live2dBehavior?.enableEyeTracking) {
-    currentModel.focus(event.clientX, event.clientY)
-  }
+  const rect = canvasRef.value?.getBoundingClientRect()
+  if (!rect) return
+  trackingMouseInside = true
+  focusTargetX = Math.max(rect.left, Math.min(rect.right, event.clientX))
+  focusTargetY = Math.max(rect.top, Math.min(rect.bottom, event.clientY))
+}
+
+function handleMouseLeave() {
+  trackingMouseInside = false
+  focusTargetX = window.innerWidth / 2
+  focusTargetY = window.innerHeight * 0.45
 }
 
 function handleClick(event: MouseEvent) {
@@ -420,6 +539,80 @@ function handleClick(event: MouseEvent) {
     currentModel.tap(event.clientX, event.clientY)
   }
 }
+
+function toggleControlPanel() {
+  showControlPanel.value = !showControlPanel.value
+}
+
+async function triggerExpressionManually() {
+  const name = selectedExpression.value.trim()
+  if (!name) return
+  await performAction({ type: 'expression', name })
+  logLive2D('info', `Live2D 手动触发表情: ${name}`)
+}
+
+async function triggerMotionManually() {
+  const name = selectedMotion.value.trim()
+  if (!name) return
+  await performAction({ type: 'motion', name, priority: 3 })
+  logLive2D('info', `Live2D 手动触发动作: ${name}`)
+}
+
+function bindDragResizeListeners() {
+  const onMove = (event: MouseEvent) => {
+    if (draggingWindow) {
+      void window.electronAPI.window.dragUpdate(event.screenX, event.screenY)
+    }
+    if (resizingEdge) {
+      void window.electronAPI.window.resizeUpdate(event.screenX, event.screenY)
+    }
+  }
+  const onUp = () => {
+    if (draggingWindow) {
+      draggingWindow = false
+      void window.electronAPI.window.dragEnd()
+    }
+    if (resizingEdge) {
+      resizingEdge = null
+      void window.electronAPI.window.resizeEnd()
+    }
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    removeDragResizeListeners = null
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+  removeDragResizeListeners = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    removeDragResizeListeners = null
+  }
+}
+
+function startDragWindow(event: MouseEvent) {
+  if (event.button !== 0) return
+  draggingWindow = true
+  void window.electronAPI.window.dragBegin(event.screenX, event.screenY)
+  bindDragResizeListeners()
+}
+
+function startResizeWindow(
+  edge: 'top' | 'right' | 'bottom' | 'left' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
+  event: MouseEvent
+) {
+  if (event.button !== 0) return
+  resizingEdge = edge
+  void window.electronAPI.window.resizeBegin(edge, event.screenX, event.screenY)
+  bindDragResizeListeners()
+}
+
+watch(
+  () => configStore.config.live2dActionMap,
+  () => {
+    syncActionOptionsFromConfig()
+  },
+  { deep: true }
+)
 
 onMounted(async () => {
   if (!canvasRef.value) return
@@ -437,6 +630,8 @@ onMounted(async () => {
   patchRendererInteractionManager('after-pixi-init')
 
   await configStore.loadConfig()
+  applyBehavior(configStore.config.live2dBehavior, 'initial-config')
+  syncActionOptionsFromConfig()
   await ensureLive2DRuntime()
   if (configStore.config.live2dModelPath) {
     await loadModel(configStore.config.live2dModelPath)
@@ -446,14 +641,24 @@ onMounted(async () => {
 
   idleTicker = (delta: number) => {
     if (!currentModel) return
-    const behavior = configStore.config.live2dBehavior
-    if (!behavior?.enableIdleSway) return
+    const behavior = behaviorState.value
+    if (behavior?.enableIdleSway) {
+      swayTime += delta / 60
+      const speed = Math.max(0.1, behavior.idleSwaySpeed || 0.8)
+      const amplitude = Math.max(0, behavior.idleSwayAmplitude || 0)
+      currentModel.x = baseX + Math.sin(swayTime * speed) * amplitude
+      currentModel.rotation = baseRotation + Math.sin(swayTime * speed * 0.7) * 0.01
+    } else {
+      currentModel.x = baseX
+      currentModel.rotation = baseRotation
+    }
 
-    swayTime += delta / 60
-    const speed = Math.max(0.1, behavior.idleSwaySpeed || 0.8)
-    const amplitude = Math.max(0, behavior.idleSwayAmplitude || 0)
-    currentModel.x = baseX + Math.sin(swayTime * speed) * amplitude
-    currentModel.rotation = baseRotation + Math.sin(swayTime * speed * 0.7) * 0.01
+    if (behavior?.enableEyeTracking) {
+      const lerp = trackingMouseInside ? 0.24 : 0.12
+      focusCurrentX += (focusTargetX - focusCurrentX) * lerp
+      focusCurrentY += (focusTargetY - focusCurrentY) * lerp
+      currentModel.focus(focusCurrentX, focusCurrentY)
+    }
   }
   pixiApp.ticker.add(idleTicker)
 
@@ -462,17 +667,31 @@ onMounted(async () => {
   })
   const offLoadModel = window.electronAPI.live2d.onLoadModel((modelPath: string) => {
     logLive2D('info', `收到 Live2D 切换模型事件: ${modelPath}`)
-    loadModel(modelPath)
+    void configStore.loadConfig().then(() => {
+      applyBehavior(configStore.config.live2dBehavior, 'reload-on-model-change')
+      syncActionOptionsFromConfig()
+      return loadModel(modelPath)
+    })
   })
   const offShowReply = window.electronAPI.live2d.onShowReply((text: string) => {
     showReply(text)
   })
-  cleanups.push(offAction, offLoadModel, offShowReply)
+  const offBehaviorUpdate = window.electronAPI.live2d.onBehaviorUpdate((behavior: {
+    enableIdleSway: boolean
+    idleSwayAmplitude: number
+    idleSwaySpeed: number
+    enableEyeTracking: boolean
+  }) => {
+    applyBehavior(behavior, 'ipc')
+  })
+  cleanups.push(offAction, offLoadModel, offShowReply, offBehaviorUpdate)
 
   window.addEventListener('resize', handleResize)
   window.addEventListener('mousemove', handleMouseMove)
+  window.addEventListener('mouseleave', handleMouseLeave)
   cleanups.push(() => window.removeEventListener('resize', handleResize))
   cleanups.push(() => window.removeEventListener('mousemove', handleMouseMove))
+  cleanups.push(() => window.removeEventListener('mouseleave', handleMouseLeave))
 })
 
 onBeforeUnmount(() => {
@@ -492,6 +711,18 @@ onBeforeUnmount(() => {
     pixiApp = null
   }
 
+  if (draggingWindow) {
+    draggingWindow = false
+    void window.electronAPI.window.dragEnd()
+  }
+  if (resizingEdge) {
+    resizingEdge = null
+    void window.electronAPI.window.resizeEnd()
+  }
+  if (removeDragResizeListeners) {
+    removeDragResizeListeners()
+  }
+
   if (replyTimer) clearTimeout(replyTimer)
 })
 </script>
@@ -503,7 +734,7 @@ onBeforeUnmount(() => {
   height: 100%;
   overflow: hidden;
   background: transparent;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
 .drag-bar {
@@ -513,7 +744,7 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 34px;
   z-index: 900;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
   cursor: move;
 }
 
@@ -547,6 +778,137 @@ canvas {
   max-height: 120px;
   overflow-y: auto;
   word-break: break-word;
+}
+
+.control-toggle {
+  position: absolute;
+  right: 10px;
+  top: 40px;
+  z-index: 940;
+  -webkit-app-region: no-drag;
+}
+
+.control-toggle-btn {
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.control-panel {
+  position: absolute;
+  right: 10px;
+  top: 72px;
+  z-index: 940;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
+  -webkit-app-region: no-drag;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.control-row select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  border-radius: 8px;
+}
+
+.control-row button {
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid rgba(15, 118, 110, 0.35);
+  background: rgba(15, 118, 110, 0.1);
+  color: #0f766e;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.resize-handle {
+  position: absolute;
+  z-index: 980;
+  -webkit-app-region: no-drag;
+}
+
+.resize-handle.top,
+.resize-handle.bottom {
+  left: 10px;
+  right: 10px;
+  height: 6px;
+}
+
+.resize-handle.left,
+.resize-handle.right {
+  top: 10px;
+  bottom: 10px;
+  width: 6px;
+}
+
+.resize-handle.top {
+  top: 0;
+  cursor: ns-resize;
+}
+
+.resize-handle.right {
+  right: 0;
+  cursor: ew-resize;
+}
+
+.resize-handle.bottom {
+  bottom: 0;
+  cursor: ns-resize;
+}
+
+.resize-handle.left {
+  left: 0;
+  cursor: ew-resize;
+}
+
+.resize-handle.top-left,
+.resize-handle.top-right,
+.resize-handle.bottom-left,
+.resize-handle.bottom-right {
+  width: 10px;
+  height: 10px;
+}
+
+.resize-handle.top-left {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.resize-handle.top-right {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.resize-handle.bottom-left {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.resize-handle.bottom-right {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
 }
 
 @keyframes fadeIn {

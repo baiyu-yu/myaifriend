@@ -37,6 +37,19 @@ class Application {
   private isQuitting = false
   private runtimeLogs: AppLogEntry[] = []
   private storageMetaPath = ''
+  private dragSessions = new Map<number, { win: BrowserWindow; startX: number; startY: number; winX: number; winY: number }>()
+  private resizeSessions = new Map<
+    number,
+    {
+      win: BrowserWindow
+      edge: 'top' | 'right' | 'bottom' | 'left' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+      startX: number
+      startY: number
+      bounds: Electron.Rectangle
+      minWidth: number
+      minHeight: number
+    }
+  >()
 
   private registerShortcutWithFallback(
     shortcut: string,
@@ -308,7 +321,7 @@ class Application {
       transparent: true,
       backgroundColor: '#00000000',
       alwaysOnTop: true,
-      resizable: false,
+      resizable: true,
       skipTaskbar: true,
       hasShadow: false,
       autoHideMenuBar: true,
@@ -331,12 +344,16 @@ class Application {
     }
 
     this.live2dWindow.webContents.on('did-finish-load', () => {
-      const modelPath = this.configManager.getAll().live2dModelPath
+      const config = this.configManager.getAll()
+      const modelPath = config.live2dModelPath
       this.addRuntimeLog(
         'info',
         `Live2D 窗口完成加载: hasModel=${Boolean(modelPath)} visible=${this.live2dWindow?.isVisible()}`,
         'live2d'
       )
+      this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_BEHAVIOR_UPDATE, {
+        ...config.live2dBehavior,
+      })
       if (modelPath) {
         this.addRuntimeLog('info', `Live2D 窗口初始化下发模型: ${modelPath}`, 'live2d')
         this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
@@ -426,6 +443,104 @@ class Application {
     }
     this.live2dWindow.focus()
     this.live2dWindow.setIgnoreMouseEvents(false)
+  }
+
+  private beginWindowDrag(sender: Electron.WebContents, x: number, y: number) {
+    const win = BrowserWindow.fromWebContents(sender)
+    if (!win || win.isDestroyed()) return { ok: false }
+    const [winX, winY] = win.getPosition()
+    this.dragSessions.set(sender.id, { win, startX: x, startY: y, winX, winY })
+    return { ok: true }
+  }
+
+  private updateWindowDrag(sender: Electron.WebContents, x: number, y: number) {
+    const session = this.dragSessions.get(sender.id)
+    if (!session) return { ok: false }
+    if (session.win.isDestroyed()) {
+      this.dragSessions.delete(sender.id)
+      return { ok: false }
+    }
+    const nextX = Math.round(session.winX + (x - session.startX))
+    const nextY = Math.round(session.winY + (y - session.startY))
+    session.win.setPosition(nextX, nextY)
+    return { ok: true }
+  }
+
+  private endWindowDrag(sender: Electron.WebContents) {
+    const had = this.dragSessions.delete(sender.id)
+    return { ok: had }
+  }
+
+  private getWindowMinSize(win: BrowserWindow): { minWidth: number; minHeight: number } {
+    if (win === this.chatWindow) return { minWidth: 260, minHeight: 240 }
+    if (win === this.live2dWindow) return { minWidth: 180, minHeight: 180 }
+    return { minWidth: 160, minHeight: 120 }
+  }
+
+  private beginWindowResize(
+    sender: Electron.WebContents,
+    edge: 'top' | 'right' | 'bottom' | 'left' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
+    x: number,
+    y: number
+  ) {
+    const win = BrowserWindow.fromWebContents(sender)
+    if (!win || win.isDestroyed()) return { ok: false }
+    const bounds = win.getBounds()
+    const { minWidth, minHeight } = this.getWindowMinSize(win)
+    this.resizeSessions.set(sender.id, { win, edge, startX: x, startY: y, bounds, minWidth, minHeight })
+    return { ok: true }
+  }
+
+  private updateWindowResize(sender: Electron.WebContents, x: number, y: number) {
+    const session = this.resizeSessions.get(sender.id)
+    if (!session) return { ok: false }
+    if (session.win.isDestroyed()) {
+      this.resizeSessions.delete(sender.id)
+      return { ok: false }
+    }
+
+    const dx = x - session.startX
+    const dy = y - session.startY
+    let { x: nextX, y: nextY, width: nextWidth, height: nextHeight } = session.bounds
+    const { edge, minWidth, minHeight } = session
+    const useLeft = edge.includes('left')
+    const useRight = edge.includes('right')
+    const useTop = edge.includes('top')
+    const useBottom = edge.includes('bottom')
+
+    if (useRight) {
+      nextWidth = Math.max(minWidth, session.bounds.width + dx)
+    }
+    if (useBottom) {
+      nextHeight = Math.max(minHeight, session.bounds.height + dy)
+    }
+    if (useLeft) {
+      const candidateWidth = session.bounds.width - dx
+      nextWidth = Math.max(minWidth, candidateWidth)
+      nextX = session.bounds.x + (session.bounds.width - nextWidth)
+    }
+    if (useTop) {
+      const candidateHeight = session.bounds.height - dy
+      nextHeight = Math.max(minHeight, candidateHeight)
+      nextY = session.bounds.y + (session.bounds.height - nextHeight)
+    }
+
+    session.win.setBounds({
+      x: Math.round(nextX),
+      y: Math.round(nextY),
+      width: Math.round(nextWidth),
+      height: Math.round(nextHeight),
+    })
+    return { ok: true }
+  }
+
+  private endWindowResize(sender: Electron.WebContents) {
+    const session = this.resizeSessions.get(sender.id)
+    const had = this.resizeSessions.delete(sender.id)
+    if (session?.win && !session.win.isDestroyed()) {
+      this.schedulePersistWindowSize()
+    }
+    return { ok: had }
   }
 
   private restartFileWatcher() {
@@ -879,6 +994,12 @@ class Application {
           this.live2dWindow?.hide()
         }
       }
+      if (key === 'live2dBehavior') {
+        this.addRuntimeLog('info', '配置变更触发 Live2D 行为更新', 'live2d')
+        this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_BEHAVIOR_UPDATE, {
+          ...this.configManager.getAll().live2dBehavior,
+        })
+      }
       if (key === 'hotkeys') {
         hotkeyResult = this.registerGlobalShortcuts()
         this.configManager.set('hotkeys', hotkeyResult.applied)
@@ -987,6 +1108,42 @@ class Application {
         }
       }
     })
+    ipcMain.handle(IPC_CHANNELS.WINDOW_DRAG_BEGIN, (e, payload: { x: number; y: number }) =>
+      this.beginWindowDrag(e.sender, Number(payload?.x || 0), Number(payload?.y || 0))
+    )
+    ipcMain.handle(IPC_CHANNELS.WINDOW_DRAG_UPDATE, (e, payload: { x: number; y: number }) =>
+      this.updateWindowDrag(e.sender, Number(payload?.x || 0), Number(payload?.y || 0))
+    )
+    ipcMain.handle(IPC_CHANNELS.WINDOW_DRAG_END, (e) => this.endWindowDrag(e.sender))
+    ipcMain.handle(
+      IPC_CHANNELS.WINDOW_RESIZE_BEGIN,
+      (
+        e,
+        payload: {
+          edge:
+            | 'top'
+            | 'right'
+            | 'bottom'
+            | 'left'
+            | 'top-left'
+            | 'top-right'
+            | 'bottom-left'
+            | 'bottom-right'
+          x: number
+          y: number
+        }
+      ) =>
+        this.beginWindowResize(
+          e.sender,
+          payload?.edge || 'right',
+          Number(payload?.x || 0),
+          Number(payload?.y || 0)
+        )
+    )
+    ipcMain.handle(IPC_CHANNELS.WINDOW_RESIZE_UPDATE, (e, payload: { x: number; y: number }) =>
+      this.updateWindowResize(e.sender, Number(payload?.x || 0), Number(payload?.y || 0))
+    )
+    ipcMain.handle(IPC_CHANNELS.WINDOW_RESIZE_END, (e) => this.endWindowResize(e.sender))
 
     ipcMain.handle(IPC_CHANNELS.DIALOG_SELECT_FOLDER, async (e) => {
       const win = BrowserWindow.fromWebContents(e.sender) || this.mainWindow!

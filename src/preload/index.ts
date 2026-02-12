@@ -52,6 +52,26 @@ const electronAPI = {
     action: (action: Live2DAction) => ipcRenderer.invoke(IPC_CHANNELS.LIVE2D_ACTION, action),
     loadModel: (modelPath: string) => ipcRenderer.invoke(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath),
     showReply: (text: string) => ipcRenderer.invoke(IPC_CHANNELS.LIVE2D_SHOW_REPLY, text),
+    onBehaviorUpdate: (
+      callback: (behavior: {
+        enableIdleSway: boolean
+        idleSwayAmplitude: number
+        idleSwaySpeed: number
+        enableEyeTracking: boolean
+      }) => void
+    ) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        behavior: {
+          enableIdleSway: boolean
+          idleSwayAmplitude: number
+          idleSwaySpeed: number
+          enableEyeTracking: boolean
+        }
+      ) => callback(behavior)
+      ipcRenderer.on(IPC_CHANNELS.LIVE2D_BEHAVIOR_UPDATE, listener)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.LIVE2D_BEHAVIOR_UPDATE, listener)
+    },
     onAction: (callback: (action: Live2DAction) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, action: Live2DAction) => callback(action)
       ipcRenderer.on(IPC_CHANNELS.LIVE2D_ACTION, listener)
@@ -77,6 +97,16 @@ const electronAPI = {
     openSettings: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_OPEN_SETTINGS),
     minimize: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_MINIMIZE),
     close: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_CLOSE),
+    dragBegin: (x: number, y: number) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_DRAG_BEGIN, { x, y }),
+    dragUpdate: (x: number, y: number) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_DRAG_UPDATE, { x, y }),
+    dragEnd: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_DRAG_END),
+    resizeBegin: (
+      edge: 'top' | 'right' | 'bottom' | 'left' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
+      x: number,
+      y: number
+    ) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_RESIZE_BEGIN, { edge, x, y }),
+    resizeUpdate: (x: number, y: number) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_RESIZE_UPDATE, { x, y }),
+    resizeEnd: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_RESIZE_END),
   },
 
   on: {

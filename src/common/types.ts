@@ -243,6 +243,7 @@ export const IPC_CHANNELS = {
   LIVE2D_ACTION: 'live2d:action',
   LIVE2D_LOAD_MODEL: 'live2d:loadModel',
   LIVE2D_SHOW_REPLY: 'live2d:showReply',
+  LIVE2D_BEHAVIOR_UPDATE: 'live2d:behaviorUpdate',
 
   // Window
   WINDOW_TOGGLE_CHAT: 'window:toggleChat',
@@ -252,6 +253,12 @@ export const IPC_CHANNELS = {
   WINDOW_OPEN_SETTINGS: 'window:openSettings',
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_CLOSE: 'window:close',
+  WINDOW_DRAG_BEGIN: 'window:dragBegin',
+  WINDOW_DRAG_UPDATE: 'window:dragUpdate',
+  WINDOW_DRAG_END: 'window:dragEnd',
+  WINDOW_RESIZE_BEGIN: 'window:resizeBegin',
+  WINDOW_RESIZE_UPDATE: 'window:resizeUpdate',
+  WINDOW_RESIZE_END: 'window:resizeEnd',
 
   // File Watcher
   FILE_WATCH_EVENT: 'fileWatch:event',
