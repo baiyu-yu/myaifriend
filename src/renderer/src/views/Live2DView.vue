@@ -83,6 +83,8 @@ let focusTargetY = window.innerHeight * 0.45
 let focusCurrentX = focusTargetX
 let focusCurrentY = focusTargetY
 let trackingMouseInside = false
+let lastPointerX = 0
+let lastPointerY = 0
 let draggingWindow = false
 let resizingEdge:
   | 'top'
@@ -96,6 +98,7 @@ let resizingEdge:
   | null = null
 let lastInteractionState = ''
 let removeDragResizeListeners: (() => void) | null = null
+let mousePassthroughEnabled = false
 
 function describeError(error: unknown): string {
   if (error instanceof Error) {
@@ -124,24 +127,39 @@ function sanitizeBehavior(input: any) {
 }
 
 function applyBehavior(input: any, source: string) {
-  behaviorState.value = sanitizeBehavior(input)
-  logLive2D(
-    'info',
-    `Live2D 行为参数已更新: source=${source}, sway=${behaviorState.value.enableIdleSway}, amp=${behaviorState.value.idleSwayAmplitude}, speed=${behaviorState.value.idleSwaySpeed}, eye=${behaviorState.value.enableEyeTracking}`
-  )
+  const next = sanitizeBehavior(input)
+  const prev = behaviorState.value
+  behaviorState.value = next
+  if (
+    prev.enableIdleSway !== next.enableIdleSway ||
+    prev.idleSwayAmplitude !== next.idleSwayAmplitude ||
+    prev.idleSwaySpeed !== next.idleSwaySpeed ||
+    prev.enableEyeTracking !== next.enableEyeTracking
+  ) {
+    logLive2D(
+      'info',
+      `Live2D 行为参数已更新: source=${source}, sway=${next.enableIdleSway}, amp=${next.idleSwayAmplitude}, speed=${next.idleSwaySpeed}, eye=${next.enableEyeTracking}`
+    )
+  }
 }
 
 function syncActionOptionsFromConfig() {
   const expMap = configStore.config.live2dActionMap?.expression || {}
   const motMap = configStore.config.live2dActionMap?.motion || {}
-  const exp = new Set<string>([...Object.keys(expMap), ...Object.values(expMap)])
-  const mot = new Set<string>([...Object.keys(motMap), ...Object.values(motMap)])
+  const exp = new Set<string>(Object.keys(expMap))
+  const mot = new Set<string>(Object.keys(motMap))
+  if (exp.size === 0) {
+    for (const value of Object.values(expMap)) exp.add(value)
+  }
+  if (mot.size === 0) {
+    for (const value of Object.values(motMap)) mot.add(value)
+  }
   expressionOptions.value = Array.from(exp).filter(Boolean)
   motionOptions.value = Array.from(mot).filter(Boolean)
-  if (!selectedExpression.value && expressionOptions.value.length > 0) {
+  if (!expressionOptions.value.includes(selectedExpression.value) && expressionOptions.value.length > 0) {
     selectedExpression.value = expressionOptions.value[0]
   }
-  if (!selectedMotion.value && motionOptions.value.length > 0) {
+  if (!motionOptions.value.includes(selectedMotion.value) && motionOptions.value.length > 0) {
     selectedMotion.value = motionOptions.value[0]
   }
 }
@@ -201,10 +219,7 @@ function patchRendererInteractionManager(reason: string): void {
     }
     return
   }
-  if (lastInteractionState !== 'ready') {
-    logLive2D('info', `Live2D interaction manager 可用: reason=${reason}, on/off 已存在`)
-    lastInteractionState = 'ready'
-  }
+  lastInteractionState = 'ready'
 }
 
 function destroyCurrentModelSafely(reason: string): void {
@@ -219,7 +234,6 @@ function destroyCurrentModelSafely(reason: string): void {
 
   try {
     currentModel.destroy()
-    logLive2D('info', `Live2D 旧模型销毁完成: reason=${reason}`)
   } catch (error) {
     logLive2D('warn', `Live2D 旧模型销毁异常(已忽略): reason=${reason} | ${describeError(error)}`)
   } finally {
@@ -405,25 +419,6 @@ async function loadModel(modelPath: string) {
     let model: Live2DModelType | null = null
     const attemptErrors: string[] = []
     for (const url of urls) {
-      const probeStart = performance.now()
-      try {
-        const response = await fetch(url, { cache: 'no-store' })
-        const elapsed = (performance.now() - probeStart).toFixed(1)
-        if (response.ok) {
-          logLive2D(
-            'info',
-            `Live2D 模型探测成功: ${url} | status=${response.status} | cost=${elapsed}ms`
-          )
-        } else {
-          logLive2D(
-            'warn',
-            `Live2D 模型探测返回非2xx: ${url} | status=${response.status} | cost=${elapsed}ms`
-          )
-        }
-      } catch (probeError) {
-        logLive2D('warn', `Live2D 模型探测失败: ${url} | ${describeError(probeError)}`)
-      }
-
       try {
         model = await live2DModelCtor.from(url, {
           autoInteract: false,
@@ -468,39 +463,151 @@ async function loadModel(modelPath: string) {
   }
 }
 
-function resolveMappedActionName(action: Live2DAction): string {
-  const map = configStore.config.live2dActionMap
-  if (!map) return action.name
-
-  if (action.type === 'expression') {
-    return map.expression[action.name] || action.name
-  }
-
-  if (action.type === 'motion') {
-    return map.motion[action.name] || action.name
-  }
-
-  return action.name
+function normalizeActionToken(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s_-]+/g, '')
 }
 
-async function performAction(action: Live2DAction) {
-  if (!currentModel) return
+function resolveActionMap(type: 'expression' | 'motion'): Record<string, string> {
+  const map = configStore.config.live2dActionMap
+  if (!map) return {}
+  return type === 'expression' ? map.expression || {} : map.motion || {}
+}
 
-  try {
-    if (action.type === 'expression') {
-      await currentModel.expression(resolveMappedActionName(action))
-      return
-    }
+function resolveMappedActionName(action: Live2DAction): string {
+  if (action.type !== 'expression' && action.type !== 'motion') return action.name
+  const input = action.name.trim()
+  if (!input) return ''
+  const map = resolveActionMap(action.type)
+  if (map[input]) return map[input]
 
-    if (action.type === 'motion') {
-      const priority = action.priority === 3 ? motionPriorityForce : motionPriorityNormal
-      await currentModel.motion(resolveMappedActionName(action), undefined, priority)
-      return
-    }
-  } catch (error) {
-    logLive2D('warn', `Live2D 动作执行失败: ${JSON.stringify(action)} | ${describeError(error)}`)
-    console.warn('[Live2D] 动作执行失败:', error)
+  const lowered = input.toLowerCase()
+  for (const [alias, target] of Object.entries(map)) {
+    if (alias.toLowerCase() === lowered) return target
   }
+  for (const [alias, target] of Object.entries(map)) {
+    if (target === input || target.toLowerCase() === lowered) return alias
+  }
+  return input
+}
+
+function collectAvailableActionNames(type: 'expression' | 'motion'): string[] {
+  if (!currentModel) return []
+  if (type === 'motion') {
+    const defs = (currentModel as any)?.internalModel?.motionManager?.definitions || {}
+    return Object.keys(defs).filter(Boolean)
+  }
+
+  const defs = (currentModel as any)?.internalModel?.expressionManager?.definitions
+  if (!Array.isArray(defs)) return []
+  const names = new Set<string>()
+  for (const item of defs) {
+    const raw =
+      typeof item === 'string'
+        ? item
+        : String(item?.Name || item?.name || item?.File || item?.file || '').trim()
+    if (!raw) continue
+    names.add(raw)
+    names.add(raw.replace(/\.(exp3\.json|json)$/i, ''))
+  }
+  return Array.from(names)
+}
+
+function findBestAvailableName(candidates: string[], available: string[]): string {
+  if (available.length === 0) return candidates[0] || ''
+  const cleanCandidates = candidates.map((item) => item.trim()).filter(Boolean)
+  for (const candidate of cleanCandidates) {
+    if (available.includes(candidate)) return candidate
+  }
+  for (const candidate of cleanCandidates) {
+    const lower = candidate.toLowerCase()
+    const hit = available.find((name) => name.toLowerCase() === lower)
+    if (hit) return hit
+  }
+  for (const candidate of cleanCandidates) {
+    const normalized = normalizeActionToken(candidate)
+    const hit = available.find((name) => normalizeActionToken(name) === normalized)
+    if (hit) return hit
+  }
+  return cleanCandidates[0] || ''
+}
+
+async function performAction(action: Live2DAction): Promise<{ ok: boolean; resolvedName: string }> {
+  if (!currentModel) return { ok: false, resolvedName: '' }
+  if (action.type !== 'expression' && action.type !== 'motion') {
+    return { ok: false, resolvedName: action.name }
+  }
+
+  const mapped = resolveMappedActionName(action).trim()
+  const original = action.name.trim()
+  const available = collectAvailableActionNames(action.type)
+  const primary = findBestAvailableName([mapped, original], available)
+  const candidates = Array.from(new Set([primary, mapped, original].map((item) => item.trim()).filter(Boolean)))
+
+  const executeByName = async (name: string) => {
+    if (action.type === 'expression') {
+      await currentModel!.expression(name)
+      return
+    }
+    const priority = action.priority === 3 ? motionPriorityForce : motionPriorityNormal
+    await currentModel!.motion(name, undefined, priority)
+  }
+
+  const errors: string[] = []
+  for (const candidate of candidates) {
+    try {
+      await executeByName(candidate)
+      return { ok: true, resolvedName: candidate }
+    } catch (error) {
+      errors.push(`${candidate}: ${describeError(error)}`)
+    }
+  }
+
+  const availableSample = available.slice(0, 8).join(', ') || '无'
+  logLive2D(
+    'warn',
+    `Live2D 动作执行失败: type=${action.type}, input=${action.name}, mapped=${mapped || '空'}, available=${availableSample}, errors=${errors.slice(0, 2).join(' | ') || '无'}`
+  )
+  return { ok: false, resolvedName: mapped || original }
+}
+
+function setMousePassthrough(enabled: boolean) {
+  if (mousePassthroughEnabled === enabled) return
+  mousePassthroughEnabled = enabled
+  void window.electronAPI.window.setMousePassthrough(enabled)
+}
+
+function isPointInsideModel(clientX: number, clientY: number): boolean {
+  if (!canvasRef.value || !currentModel) return false
+  const rect = canvasRef.value.getBoundingClientRect()
+  const localX = clientX - rect.left
+  const localY = clientY - rect.top
+  if (localX < 0 || localY < 0 || localX > rect.width || localY > rect.height) return false
+  try {
+    const bounds = currentModel.getBounds()
+    return (
+      localX >= bounds.x &&
+      localX <= bounds.x + bounds.width &&
+      localY >= bounds.y &&
+      localY <= bounds.y + bounds.height
+    )
+  } catch {
+    return false
+  }
+}
+
+function isPointerOnInteractiveElement(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  return Boolean(target.closest('.control-panel, .control-toggle, .reply-bubble, .resize-handle, .drag-bar'))
+}
+
+function updateMousePassthroughByPointer(event: MouseEvent) {
+  if (draggingWindow || resizingEdge) {
+    setMousePassthrough(false)
+    return
+  }
+  const onInteractiveElement = isPointerOnInteractiveElement(event.target)
+  const onModel = isPointInsideModel(event.clientX, event.clientY)
+  setMousePassthrough(!(onInteractiveElement || onModel))
 }
 
 function showReply(text: string) {
@@ -517,20 +624,32 @@ function handleResize() {
   fitModel(currentModel, 'resize')
   focusTargetX = window.innerWidth / 2
   focusTargetY = window.innerHeight * 0.45
+  if (lastPointerX > 0 || lastPointerY > 0) {
+    updateMousePassthroughByPointer(
+      new MouseEvent('mousemove', {
+        clientX: lastPointerX,
+        clientY: lastPointerY,
+      })
+    )
+  }
 }
 
 function handleMouseMove(event: MouseEvent) {
   const rect = canvasRef.value?.getBoundingClientRect()
   if (!rect) return
+  lastPointerX = event.clientX
+  lastPointerY = event.clientY
   trackingMouseInside = true
   focusTargetX = Math.max(rect.left, Math.min(rect.right, event.clientX))
   focusTargetY = Math.max(rect.top, Math.min(rect.bottom, event.clientY))
+  updateMousePassthroughByPointer(event)
 }
 
 function handleMouseLeave() {
   trackingMouseInside = false
   focusTargetX = window.innerWidth / 2
   focusTargetY = window.innerHeight * 0.45
+  setMousePassthrough(true)
 }
 
 function handleClick(event: MouseEvent) {
@@ -547,19 +666,45 @@ function toggleControlPanel() {
 async function triggerExpressionManually() {
   const name = selectedExpression.value.trim()
   if (!name) return
-  await performAction({ type: 'expression', name })
-  logLive2D('info', `Live2D 手动触发表情: ${name}`)
+  const result = await performAction({ type: 'expression', name })
+  if (result.ok) {
+    logLive2D('info', `Live2D 手动触发表情成功: ${name} => ${result.resolvedName}`)
+  } else {
+    logLive2D('warn', `Live2D 手动触发表情失败: ${name}`)
+  }
 }
 
 async function triggerMotionManually() {
   const name = selectedMotion.value.trim()
   if (!name) return
-  await performAction({ type: 'motion', name, priority: 3 })
-  logLive2D('info', `Live2D 手动触发动作: ${name}`)
+  const result = await performAction({ type: 'motion', name, priority: 3 })
+  if (result.ok) {
+    logLive2D('info', `Live2D 手动触发动作成功: ${name} => ${result.resolvedName}`)
+  } else {
+    logLive2D('warn', `Live2D 手动触发动作失败: ${name}`)
+  }
+}
+
+function stopActiveDragResize() {
+  if (draggingWindow) {
+    draggingWindow = false
+    void window.electronAPI.window.dragEnd()
+  }
+  if (resizingEdge) {
+    resizingEdge = null
+    void window.electronAPI.window.resizeEnd()
+  }
 }
 
 function bindDragResizeListeners() {
+  if (removeDragResizeListeners) {
+    removeDragResizeListeners()
+  }
   const onMove = (event: MouseEvent) => {
+    if (event.buttons === 0 && (draggingWindow || resizingEdge)) {
+      stopActiveDragResize()
+      return
+    }
     if (draggingWindow) {
       void window.electronAPI.window.dragUpdate(event.screenX, event.screenY)
     }
@@ -568,14 +713,7 @@ function bindDragResizeListeners() {
     }
   }
   const onUp = () => {
-    if (draggingWindow) {
-      draggingWindow = false
-      void window.electronAPI.window.dragEnd()
-    }
-    if (resizingEdge) {
-      resizingEdge = null
-      void window.electronAPI.window.resizeEnd()
-    }
+    stopActiveDragResize()
     window.removeEventListener('mousemove', onMove)
     window.removeEventListener('mouseup', onUp)
     removeDragResizeListeners = null
@@ -591,6 +729,11 @@ function bindDragResizeListeners() {
 
 function startDragWindow(event: MouseEvent) {
   if (event.button !== 0) return
+  if (resizingEdge) {
+    resizingEdge = null
+    void window.electronAPI.window.resizeEnd()
+  }
+  setMousePassthrough(false)
   draggingWindow = true
   void window.electronAPI.window.dragBegin(event.screenX, event.screenY)
   bindDragResizeListeners()
@@ -601,9 +744,19 @@ function startResizeWindow(
   event: MouseEvent
 ) {
   if (event.button !== 0) return
+  if (draggingWindow) {
+    draggingWindow = false
+    void window.electronAPI.window.dragEnd()
+  }
+  setMousePassthrough(false)
   resizingEdge = edge
   void window.electronAPI.window.resizeBegin(edge, event.screenX, event.screenY)
   bindDragResizeListeners()
+}
+
+function handleWindowBlur() {
+  stopActiveDragResize()
+  setMousePassthrough(true)
 }
 
 watch(
@@ -619,6 +772,7 @@ onMounted(async () => {
 
   logLive2D('info', 'Live2D 页面挂载')
   document.body.classList.add('live2d-page')
+  setMousePassthrough(true)
 
   pixiApp = new PIXI.Application({
     view: canvasRef.value,
@@ -663,7 +817,7 @@ onMounted(async () => {
   pixiApp.ticker.add(idleTicker)
 
   const offAction = window.electronAPI.live2d.onAction((action: Live2DAction) => {
-    performAction(action)
+    void performAction(action)
   })
   const offLoadModel = window.electronAPI.live2d.onLoadModel((modelPath: string) => {
     logLive2D('info', `收到 Live2D 切换模型事件: ${modelPath}`)
@@ -689,9 +843,11 @@ onMounted(async () => {
   window.addEventListener('resize', handleResize)
   window.addEventListener('mousemove', handleMouseMove)
   window.addEventListener('mouseleave', handleMouseLeave)
+  window.addEventListener('blur', handleWindowBlur)
   cleanups.push(() => window.removeEventListener('resize', handleResize))
   cleanups.push(() => window.removeEventListener('mousemove', handleMouseMove))
   cleanups.push(() => window.removeEventListener('mouseleave', handleMouseLeave))
+  cleanups.push(() => window.removeEventListener('blur', handleWindowBlur))
 })
 
 onBeforeUnmount(() => {
@@ -711,17 +867,11 @@ onBeforeUnmount(() => {
     pixiApp = null
   }
 
-  if (draggingWindow) {
-    draggingWindow = false
-    void window.electronAPI.window.dragEnd()
-  }
-  if (resizingEdge) {
-    resizingEdge = null
-    void window.electronAPI.window.resizeEnd()
-  }
+  stopActiveDragResize()
   if (removeDragResizeListeners) {
     removeDragResizeListeners()
   }
+  setMousePassthrough(false)
 
   if (replyTimer) clearTimeout(replyTimer)
 })

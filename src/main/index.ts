@@ -38,6 +38,7 @@ class Application {
   private runtimeLogs: AppLogEntry[] = []
   private storageMetaPath = ''
   private dragSessions = new Map<number, { win: BrowserWindow; startX: number; startY: number; winX: number; winY: number }>()
+  private mousePassthroughSessions = new Map<number, boolean>()
   private resizeSessions = new Map<
     number,
     {
@@ -448,6 +449,8 @@ class Application {
   private beginWindowDrag(sender: Electron.WebContents, x: number, y: number) {
     const win = BrowserWindow.fromWebContents(sender)
     if (!win || win.isDestroyed()) return { ok: false }
+    this.mousePassthroughSessions.set(sender.id, false)
+    win.setIgnoreMouseEvents(false)
     const [winX, winY] = win.getPosition()
     this.dragSessions.set(sender.id, { win, startX: x, startY: y, winX, winY })
     return { ok: true }
@@ -471,6 +474,17 @@ class Application {
     return { ok: had }
   }
 
+  private setWindowMousePassthrough(sender: Electron.WebContents, enabled: boolean) {
+    const win = BrowserWindow.fromWebContents(sender)
+    if (!win || win.isDestroyed()) return { ok: false }
+    const next = Boolean(enabled)
+    const prev = this.mousePassthroughSessions.get(sender.id)
+    if (prev === next) return { ok: true }
+    this.mousePassthroughSessions.set(sender.id, next)
+    win.setIgnoreMouseEvents(next, { forward: next })
+    return { ok: true }
+  }
+
   private getWindowMinSize(win: BrowserWindow): { minWidth: number; minHeight: number } {
     if (win === this.chatWindow) return { minWidth: 260, minHeight: 240 }
     if (win === this.live2dWindow) return { minWidth: 180, minHeight: 180 }
@@ -485,6 +499,8 @@ class Application {
   ) {
     const win = BrowserWindow.fromWebContents(sender)
     if (!win || win.isDestroyed()) return { ok: false }
+    this.mousePassthroughSessions.set(sender.id, false)
+    win.setIgnoreMouseEvents(false)
     const bounds = win.getBounds()
     const { minWidth, minHeight } = this.getWindowMinSize(win)
     this.resizeSessions.set(sender.id, { win, edge, startX: x, startY: y, bounds, minWidth, minHeight })
@@ -1115,6 +1131,9 @@ class Application {
       this.updateWindowDrag(e.sender, Number(payload?.x || 0), Number(payload?.y || 0))
     )
     ipcMain.handle(IPC_CHANNELS.WINDOW_DRAG_END, (e) => this.endWindowDrag(e.sender))
+    ipcMain.handle(IPC_CHANNELS.WINDOW_SET_MOUSE_PASSTHROUGH, (e, payload: { enabled: boolean }) =>
+      this.setWindowMousePassthrough(e.sender, Boolean(payload?.enabled))
+    )
     ipcMain.handle(
       IPC_CHANNELS.WINDOW_RESIZE_BEGIN,
       (

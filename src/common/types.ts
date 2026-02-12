@@ -256,6 +256,7 @@ export const IPC_CHANNELS = {
   WINDOW_DRAG_BEGIN: 'window:dragBegin',
   WINDOW_DRAG_UPDATE: 'window:dragUpdate',
   WINDOW_DRAG_END: 'window:dragEnd',
+  WINDOW_SET_MOUSE_PASSTHROUGH: 'window:setMousePassthrough',
   WINDOW_RESIZE_BEGIN: 'window:resizeBegin',
   WINDOW_RESIZE_UPDATE: 'window:resizeUpdate',
   WINDOW_RESIZE_END: 'window:resizeEnd',

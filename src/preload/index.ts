@@ -100,6 +100,8 @@ const electronAPI = {
     dragBegin: (x: number, y: number) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_DRAG_BEGIN, { x, y }),
     dragUpdate: (x: number, y: number) => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_DRAG_UPDATE, { x, y }),
     dragEnd: () => ipcRenderer.invoke(IPC_CHANNELS.WINDOW_DRAG_END),
+    setMousePassthrough: (enabled: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.WINDOW_SET_MOUSE_PASSTHROUGH, { enabled }),
     resizeBegin: (
       edge: 'top' | 'right' | 'bottom' | 'left' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
       x: number,
