@@ -32,6 +32,9 @@ body,
     linear-gradient(180deg, #f8fafb 0%, var(--bg-main) 100%);
 }
 
+html.live2d-page,
+html.live2d-page body,
+html.live2d-page #app,
 body.live2d-page,
 body.live2d-page #app {
   background: transparent !important;

@@ -608,36 +608,58 @@ async function performAction(action: Live2DAction): Promise<{ ok: boolean; resol
   const mapped = resolveMappedActionName(action).trim()
   const original = action.name.trim()
   const available = collectAvailableActionNames(action.type)
+  const expressionDefCount = Array.isArray((currentModel as any)?.internalModel?.expressionManager?.definitions)
+    ? (currentModel as any).internalModel.expressionManager.definitions.length
+    : 0
+  const motionGroupCount = Object.keys((currentModel as any)?.internalModel?.motionManager?.definitions || {}).length
+  if (available.length === 0) {
+    logLive2D(
+      'warn',
+      `Live2D 动作可用列表为空: type=${action.type}, input=${action.name}, mapped=${mapped || '空'}, modelDefs(expression=${expressionDefCount},motionGroup=${motionGroupCount})`
+    )
+  }
   const primary = findBestAvailableName([mapped, original], available)
   const candidates = Array.from(new Set([primary, mapped, original].map((item) => item.trim()).filter(Boolean)))
 
   const executeByName = async (name: string): Promise<string> => {
     if (action.type === 'expression') {
       try {
-        await currentModel!.expression(name)
-        return name
-      } catch (error) {
-        const fallbackIndex = findExpressionIndexByName(name)
-        if (fallbackIndex < 0) {
-          throw new Error(`expression(name) 失败且无索引回退: ${describeError(error)}`)
+        const okByName = await currentModel!.expression(name as any)
+        if (okByName === true) {
+          return name
         }
-        await currentModel!.expression(fallbackIndex as any)
+      } catch (error) {
+        throw new Error(`expression(name) 抛错: ${describeError(error)}`)
+      }
+      const fallbackIndex = findExpressionIndexByName(name)
+      if (fallbackIndex < 0) {
+        throw new Error('expression(name) 返回 false，且未匹配到表达式索引')
+      }
+      const okByIndex = await currentModel!.expression(fallbackIndex as any)
+      if (okByIndex === true) {
         return `${name}#${fallbackIndex}`
       }
+      throw new Error(`expression(index=${fallbackIndex}) 返回 false`)
     }
 
     const priority = action.priority === 3 ? motionPriorityForce : motionPriorityNormal
     try {
-      await currentModel!.motion(name, undefined, priority)
-      return name
-    } catch (error) {
-      const fallback = resolveMotionFallback(name)
-      if (!fallback) {
-        throw new Error(`motion(name) 失败且无分组回退: ${describeError(error)}`)
+      const okByName = await currentModel!.motion(name, undefined, priority)
+      if (okByName === true) {
+        return name
       }
-      await currentModel!.motion(fallback.group, fallback.index, priority)
+    } catch (error) {
+      throw new Error(`motion(name) 抛错: ${describeError(error)}`)
+    }
+    const fallback = resolveMotionFallback(name)
+    if (!fallback) {
+      throw new Error('motion(name) 返回 false，且未匹配到动作分组/索引')
+    }
+    const okByFallback = await currentModel!.motion(fallback.group, fallback.index, priority)
+    if (okByFallback === true) {
       return typeof fallback.index === 'number' ? `${fallback.group}[${fallback.index}]` : fallback.group
     }
+    throw new Error(`motion(fallback=${fallback.group}${typeof fallback.index === 'number' ? `[${fallback.index}]` : ''}) 返回 false`)
   }
 
   const errors: string[] = []
@@ -899,6 +921,7 @@ onMounted(async () => {
   if (!canvasRef.value) return
 
   logLive2D('info', 'Live2D 页面挂载')
+  document.documentElement.classList.add('live2d-page')
   document.body.classList.add('live2d-page')
   setMousePassthrough(true)
 
@@ -983,6 +1006,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  document.documentElement.classList.remove('live2d-page')
   document.body.classList.remove('live2d-page')
 
   for (const off of cleanups) off()
