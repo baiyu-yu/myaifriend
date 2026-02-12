@@ -132,6 +132,28 @@
 
       <el-tab-pane label="Live2D" name="live2d">
         <el-form label-width="140px" style="max-width: 860px">
+          <el-form-item label="已保存模型">
+            <div class="live2d-model-row">
+              <el-select
+                v-model="selectedSavedModelPath"
+                placeholder="选择已保存模型"
+                clearable
+                filterable
+                style="flex: 1"
+                @change="switchSavedLive2DModel"
+              >
+                <el-option
+                  v-for="item in savedLive2DModelOptions"
+                  :key="item.path"
+                  :label="item.label"
+                  :value="item.path"
+                />
+              </el-select>
+              <el-button @click="switchSavedLive2DModel(selectedSavedModelPath)" :disabled="!selectedSavedModelPath">
+                热切换
+              </el-button>
+            </div>
+          </el-form-item>
           <el-form-item label="模型文件">
             <el-input v-model="configStore.config.live2dModelPath" placeholder="选择 .model3.json 文件" readonly>
               <template #append>
@@ -614,6 +636,7 @@ async function saveLive2DConfig() {
     await configStore.setConfig('live2dBehavior', { ...configStore.config.live2dBehavior })
     await configStore.setConfig('window', { ...configStore.config.window })
     await configStore.loadConfig()
+    selectedSavedModelPath.value = configStore.config.live2dModelPath || ''
     syncActionMapRowsFromConfig()
     ElMessage.success('Live2D 配置已保存')
   } catch (error) {
@@ -623,6 +646,14 @@ async function saveLive2DConfig() {
 
 const expressionRows = ref<MappingRow[]>([])
 const motionRows = ref<MappingRow[]>([])
+const selectedSavedModelPath = ref('')
+
+const savedLive2DModelOptions = computed(() =>
+  (configStore.config.live2dModels || []).map((item) => ({
+    path: item.path,
+    label: `${item.label} · ${item.path}`,
+  }))
+)
 
 function mapToRows(mapObj: Record<string, string>): MappingRow[] {
   return Object.entries(mapObj).map(([alias, target]) => ({ alias, target }))
@@ -665,6 +696,20 @@ async function saveLive2DActionMap() {
     motion: rowsToMap(motionRows.value),
   })
   ElMessage.success('映射表已保存')
+}
+
+async function switchSavedLive2DModel(modelPath?: string) {
+  const target = String(modelPath || '').trim()
+  if (!target) return
+  try {
+    await configStore.setConfig('live2dModelPath', target)
+    await configStore.loadConfig()
+    selectedSavedModelPath.value = configStore.config.live2dModelPath || ''
+    syncActionMapRowsFromConfig()
+    ElMessage.success('已切换 Live2D 模型')
+  } catch (error) {
+    ElMessage.error(`模型切换失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 async function saveHotkeys() {
@@ -911,6 +956,7 @@ function toggleTabsCollapsed() {
 
 onMounted(async () => {
   await configStore.loadConfig()
+  selectedSavedModelPath.value = configStore.config.live2dModelPath || ''
   syncActionMapRowsFromConfig()
   syncModelAssignmentsFromConfig()
   syncSearchConfigInputs()
@@ -1056,12 +1102,16 @@ onBeforeUnmount(() => {
   position: absolute;
   left: 28px;
   bottom: 18px;
+  width: 184px;
+  text-align: left;
   color: #0f766e;
   z-index: 30;
 }
 
 .tabs.collapsed + .side-collapse-btn {
   left: 24px;
+  width: 44px;
+  text-align: center;
 }
 
 .card-header {
@@ -1101,6 +1151,12 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   padding: 16px;
   background: linear-gradient(180deg, rgba(249, 252, 252, 0.92), rgba(242, 247, 248, 0.9));
+}
+
+.live2d-model-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
 }
 
 .mapping-header {
@@ -1192,6 +1248,8 @@ onBeforeUnmount(() => {
     position: static;
     margin-top: 8px;
     align-self: flex-start;
+    width: auto;
+    text-align: left;
   }
 
   :deep(.el-form-item) {

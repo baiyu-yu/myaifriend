@@ -133,6 +133,12 @@ export interface Live2DActionMap {
   motion: Record<string, string>
 }
 
+export interface Live2DModelRecord {
+  path: string
+  label: string
+  lastUsedAt: number
+}
+
 export interface AppLogEntry {
   id: string
   timestamp: number
@@ -160,6 +166,8 @@ export interface AppConfig {
   triggerPrompts: Record<InvokeTrigger, string>
   live2dModelPath: string
   live2dActionMap: Live2DActionMap
+  live2dModelActionMaps: Record<string, Live2DActionMap>
+  live2dModels: Live2DModelRecord[]
   live2dBehavior: {
     enableIdleSway: boolean
     idleSwayAmplitude: number

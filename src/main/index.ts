@@ -17,7 +17,7 @@ import { ToolManager } from './tools/tool-manager'
 import { FileWatcher } from './file-watcher'
 import { AIEngine } from './ai/ai-engine'
 import { MemoryManager } from './ai/memory-manager'
-import { AppLogEntry, IPC_CHANNELS, InvokeContext } from '../common/types'
+import { AppLogEntry, IPC_CHANNELS, InvokeContext, Live2DActionMap } from '../common/types'
 
 class Application {
   private mainWindow: BrowserWindow | null = null
@@ -445,6 +445,52 @@ class Application {
     )
   }
 
+  private normalizeModelKey(modelPath: string): string {
+    return path.normalize(String(modelPath || '').trim())
+  }
+
+  private sanitizeLive2DActionMap(input: unknown): Live2DActionMap {
+    const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
+    const toRecord = (value: unknown): Record<string, string> => {
+      if (!value || typeof value !== 'object') return {}
+      const result: Record<string, string> = {}
+      for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+        const k = String(key || '').trim()
+        const v = String(val || '').trim()
+        if (k && v) result[k] = v
+      }
+      return result
+    }
+    return {
+      expression: toRecord(source.expression),
+      motion: toRecord(source.motion),
+    }
+  }
+
+  private mergeLive2DActionMaps(base: Live2DActionMap, override: Live2DActionMap): Live2DActionMap {
+    return {
+      expression: { ...(base.expression || {}), ...(override.expression || {}) },
+      motion: { ...(base.motion || {}), ...(override.motion || {}) },
+    }
+  }
+
+  private upsertLive2DModelRecord(modelPath: string) {
+    const config = this.configManager.getAll()
+    const normalized = this.normalizeModelKey(modelPath)
+    const now = Date.now()
+    const next = (config.live2dModels || [])
+      .filter((item) => this.normalizeModelKey(item.path) !== normalized)
+      .map((item) => ({ ...item }))
+
+    next.unshift({
+      path: modelPath,
+      label: path.basename(modelPath),
+      lastUsedAt: now,
+    })
+
+    this.configManager.set('live2dModels', next.slice(0, 30))
+  }
+
   private isModelEntryFile(filePath: string): boolean {
     const lower = path.basename(filePath).toLowerCase()
     return lower.endsWith('.model3.json') || lower.endsWith('.model.json')
@@ -532,6 +578,12 @@ class Application {
       const motion: Record<string, string> = {}
       const modelDir = path.dirname(modelPath)
       const modelStem = path.basename(modelPath).replace(/\.(model3|model)\.json$/i, '')
+      let fromModelExpression = 0
+      let fromModelMotion = 0
+      let fromCompanionExpression = 0
+      let fromCompanionMotion = 0
+      let fromScanExpression = 0
+      let fromScanMotion = 0
       const pickNameFromFile = (filePath: unknown): string => {
         const file = String(filePath || '').trim()
         if (!file) return ''
@@ -548,7 +600,10 @@ class Application {
       const expressionList = Array.isArray(expressionsV3) ? expressionsV3 : Array.isArray(expressionsV2) ? expressionsV2 : []
       for (const item of expressionList) {
         const name = String(item?.Name || item?.name || '').trim() || pickNameFromFile(item?.File || item?.file)
-        if (name) expression[name] = name
+        if (name && !expression[name]) {
+          expression[name] = name
+          fromModelExpression += 1
+        }
       }
 
       const motionsV3 = json?.FileReferences?.Motions
@@ -557,11 +612,17 @@ class Application {
         motionsV3 && typeof motionsV3 === 'object' ? motionsV3 : motionsV2 && typeof motionsV2 === 'object' ? motionsV2 : {}
       for (const key of Object.keys(motionObj)) {
         const groupName = String(key || '').trim()
-        if (groupName) motion[groupName] = groupName
+        if (groupName && !motion[groupName]) {
+          motion[groupName] = groupName
+          fromModelMotion += 1
+        }
         const items = Array.isArray(motionObj[key]) ? motionObj[key] : []
         for (const item of items) {
           const motionName = pickNameFromFile(item?.File || item?.file)
-          if (motionName) motion[motionName] = motionName
+          if (motionName && !motion[motionName]) {
+            motion[motionName] = motionName
+            fromModelMotion += 1
+          }
         }
       }
 
@@ -577,9 +638,15 @@ class Application {
             const name = String(item?.Name || item?.name || '').trim() || pickNameFromFile(item?.File || item?.file)
             if (!name) continue
             if (actionType.includes('expression')) {
-              expression[name] = name
+              if (!expression[name]) {
+                expression[name] = name
+                fromCompanionExpression += 1
+              }
             } else {
-              motion[name] = name
+              if (!motion[name]) {
+                motion[name] = name
+                fromCompanionMotion += 1
+              }
             }
           }
         } catch (error) {
@@ -612,7 +679,10 @@ class Application {
         const expressionFiles = await collectFiles(modelDir, /\.exp3\.json$/i)
         for (const filePath of expressionFiles) {
           const name = pickNameFromFile(filePath)
-          if (name) expression[name] = name
+          if (name && !expression[name]) {
+            expression[name] = name
+            fromScanExpression += 1
+          }
         }
       }
 
@@ -620,9 +690,20 @@ class Application {
         const motionFiles = await collectFiles(modelDir, /\.(motion3\.json|mtn)$/i)
         for (const filePath of motionFiles) {
           const name = pickNameFromFile(filePath)
-          if (name) motion[name] = name
+          if (name && !motion[name]) {
+            motion[name] = name
+            fromScanMotion += 1
+          }
         }
       }
+
+      const expressionSample = Object.keys(expression).slice(0, 5).join(', ') || '无'
+      const motionSample = Object.keys(motion).slice(0, 5).join(', ') || '无'
+      this.addRuntimeLog(
+        'info',
+        `Live2D 映射解析详情: model(exp:${fromModelExpression},motion:${fromModelMotion}) companion(exp:${fromCompanionExpression},motion:${fromCompanionMotion}) scan(exp:${fromScanExpression},motion:${fromScanMotion}) | exp示例: ${expressionSample} | motion示例: ${motionSample}`,
+        'live2d'
+      )
 
       return { expression, motion }
     } catch (error) {
@@ -659,18 +740,34 @@ class Application {
           throw error
         }
         if (nextValue) {
+          const modelPath = String(nextValue)
           const parsed = await this.loadLive2DActionMap(String(nextValue))
-          const current = this.configManager.getAll().live2dActionMap
-          const merged = {
-            expression: { ...parsed.expression, ...current.expression },
-            motion: { ...parsed.motion, ...current.motion },
-          }
+          const config = this.configManager.getAll()
+          const modelKey = this.normalizeModelKey(modelPath)
+          const allModelMaps = { ...(config.live2dModelActionMaps || {}) }
+          const existingForModel = this.sanitizeLive2DActionMap(allModelMaps[modelKey])
+          const merged = this.mergeLive2DActionMaps(parsed, existingForModel)
+          allModelMaps[modelKey] = merged
+          this.configManager.set('live2dModelActionMaps', allModelMaps)
           this.configManager.set('live2dActionMap', merged)
+          this.upsertLive2DModelRecord(modelPath)
           this.addRuntimeLog(
             'info',
-            `Live2D 映射已自动读取: expression ${Object.keys(parsed.expression).length} 项, motion ${Object.keys(parsed.motion).length} 项`,
+            `Live2D 映射已自动读取并切换: ${modelPath} | expression ${Object.keys(parsed.expression).length} 项, motion ${Object.keys(parsed.motion).length} 项`,
             'live2d'
           )
+        }
+      }
+      if (key === 'live2dActionMap') {
+        const normalized = this.sanitizeLive2DActionMap(value)
+        nextValue = normalized
+        const currentModelPath = this.configManager.getAll().live2dModelPath
+        if (currentModelPath) {
+          const modelKey = this.normalizeModelKey(currentModelPath)
+          const allModelMaps = { ...(this.configManager.getAll().live2dModelActionMaps || {}) }
+          allModelMaps[modelKey] = normalized
+          this.configManager.set('live2dModelActionMaps', allModelMaps)
+          this.addRuntimeLog('info', `Live2D 映射已保存到当前模型: ${currentModelPath}`, 'live2d')
         }
       }
       this.configManager.set(key, nextValue)
