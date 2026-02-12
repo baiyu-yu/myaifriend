@@ -705,39 +705,77 @@ onMounted(async () => {
 
 <style scoped>
 .settings-page {
-  padding: 24px;
+  padding: 22px;
   max-width: 1200px;
   margin: 0 auto;
   height: 100%;
   overflow-y: auto;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(248, 250, 251, 0.82));
+  border-radius: 18px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.1);
 }
 
 .header-area {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
+  padding: 6px 6px 10px;
+  border-bottom: 1px dashed rgba(15, 23, 42, 0.12);
 }
 
 .back-btn {
   font-size: 18px;
+  background: linear-gradient(135deg, #e9f8f5 0%, #d7f2ed 100%);
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  color: #0f766e;
 }
 
 .tabs {
-  margin-top: 20px;
-  background-color: #fff;
-  padding: 20px;
-  border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+  margin-top: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+:deep(.el-tabs__header) {
+  margin-bottom: 14px;
+}
+
+:deep(.el-tabs__nav-scroll) {
+  padding-bottom: 2px;
 }
 
 :deep(.el-tabs__item) {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
+  height: 36px;
+  color: #334155;
+  border-radius: 10px;
+  margin-right: 4px;
+  transition: all 0.2s;
+}
+
+:deep(.el-tabs__item:hover) {
+  color: #0f766e;
+  background: rgba(15, 118, 110, 0.09);
+}
+
+:deep(.el-tabs__item.is-active) {
+  color: #0f766e;
+  background: rgba(15, 118, 110, 0.14);
 }
 
 :deep(.el-tabs__nav-wrap::after) {
-  height: 1px;
-  background-color: #ebeef5;
+  height: 0;
+}
+
+:deep(.el-tabs__active-bar) {
+  background: linear-gradient(135deg, #0f766e, #115e59);
+  border-radius: 999px;
+  height: 3px;
 }
 
 .card-header {
@@ -763,19 +801,20 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .active {
-  border: 1px solid #409eff;
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.1);
+  border: 1px solid rgba(15, 118, 110, 0.45);
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.14);
 }
 
 .mapping-block {
   margin-bottom: 24px;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 10px;
   padding: 16px;
-  background-color: #fafafa;
+  background: linear-gradient(180deg, rgba(249, 252, 252, 0.92), rgba(242, 247, 248, 0.9));
 }
 
 .mapping-header {
@@ -793,15 +832,57 @@ onMounted(async () => {
 
 :deep(.el-form-item__label) {
   font-weight: 500;
+  color: #334155;
 }
 
 :deep(.el-card) {
-  transition: all 0.3s;
+  transition: all 0.22s;
   margin-bottom: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
 }
 
 :deep(.el-card:hover) {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+}
+
+:deep(.el-button--primary) {
+  background: linear-gradient(135deg, #0f766e 0%, #0b5e58 100%);
+  border-color: #0f766e;
+}
+
+:deep(.el-button--primary:hover) {
+  filter: brightness(1.04);
+}
+
+:deep(.el-table) {
+  border-radius: 10px;
+  overflow: hidden;
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
+:deep(.el-table th.el-table__cell) {
+  background: rgba(15, 118, 110, 0.08);
+  color: #1f2937;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .settings-page {
+    padding: 12px;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
+  }
+
+  .tabs {
+    padding: 10px;
+  }
+
+  :deep(.el-form-item) {
+    margin-bottom: 14px;
+  }
 }
 </style>

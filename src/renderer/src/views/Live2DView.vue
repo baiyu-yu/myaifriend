@@ -230,6 +230,9 @@ onBeforeUnmount(() => {
   height: 100%;
   overflow: hidden;
   cursor: pointer;
+  background:
+    radial-gradient(900px 420px at -8% -8%, rgba(15, 118, 110, 0.24), transparent 58%),
+    radial-gradient(780px 360px at 112% 0%, rgba(217, 119, 6, 0.17), transparent 55%);
 }
 
 canvas {
@@ -243,7 +246,7 @@ canvas {
   left: 10px;
   bottom: 10px;
   color: #fff;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(15, 23, 42, 0.58);
   padding: 4px 8px;
   border-radius: 6px;
   font-size: 12px;
@@ -274,14 +277,14 @@ canvas {
 }
 
 .reply-content {
-  background: rgba(255, 255, 255, 0.95);
-  border: 1px solid #e4e7ed;
-  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 14px;
   padding: 10px 14px;
   font-size: 13px;
   color: #303133;
   line-height: 1.5;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.18);
   max-height: 120px;
   overflow-y: auto;
   word-break: break-word;
@@ -309,20 +312,20 @@ canvas {
 .app-icon {
   width: 32px;
   height: 32px;
-  background-color: rgba(255, 255, 255, 0.8);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(235, 250, 248, 0.92));
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.2);
   transition: all 0.2s;
-  color: #409eff;
+  color: #0f766e;
 }
 
 .app-icon:hover {
   background-color: #fff;
   transform: scale(1.1);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 12px 22px rgba(15, 23, 42, 0.24);
 }
 </style>
