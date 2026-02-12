@@ -6,3 +6,4 @@ release/
 Thumbs.db
 .test-dist/
 .aibot-test-store/
+model/

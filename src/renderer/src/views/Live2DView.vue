@@ -13,10 +13,8 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import * as PIXI from 'pixi.js'
-import { Live2DModel, MotionPriority } from 'pixi-live2d-display'
-import 'pixi-live2d-display/cubism2'
-import 'pixi-live2d-display/cubism4'
-import 'live2dcubismcore/live2dcubismcore.min.js'
+import cubismCoreRuntimeUrl from 'live2dcubismcore/live2dcubismcore.min.js?url'
+import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4'
 import type { Live2DAction } from '../../../common/types'
 import { useConfigStore } from '../stores/config'
 
@@ -27,12 +25,96 @@ const configStore = useConfigStore()
 const cleanups: Array<() => void> = []
 
 let pixiApp: PIXI.Application | null = null
-let currentModel: Live2DModel | null = null
+let currentModel: Live2DModelType | null = null
 let replyTimer: ReturnType<typeof setTimeout> | null = null
 let idleTicker: ((delta: number) => void) | null = null
 let baseX = 0
 let baseRotation = 0
 let swayTime = 0
+let live2DModelCtor: typeof import('pixi-live2d-display/cubism4').Live2DModel | null = null
+let motionPriorityNormal = 2
+let motionPriorityForce = 3
+const runtimeScriptTasks = new Map<string, Promise<boolean>>()
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    const stack = error.stack?.split('\n').slice(0, 2).join(' > ')
+    return stack ? `${error.message} | ${stack}` : error.message
+  }
+  return String(error)
+}
+
+function logLive2D(level: 'info' | 'warn' | 'error', message: string) {
+  void window.electronAPI.app.log.add(level, message, 'live2d')
+}
+
+function getRuntimeGlobal(name: string): unknown {
+  return (window as unknown as Record<string, unknown>)[name]
+}
+
+function loadGlobalRuntimeScript(src: string, globalName: string): Promise<boolean> {
+  if (getRuntimeGlobal(globalName)) {
+    return Promise.resolve(true)
+  }
+
+  const cachedTask = runtimeScriptTasks.get(src)
+  if (cachedTask) {
+    return cachedTask
+  }
+
+  const task = new Promise<boolean>((resolve) => {
+    const script = document.createElement('script')
+    script.async = true
+    script.src = src
+    script.onload = () => {
+      resolve(Boolean(getRuntimeGlobal(globalName)))
+    }
+    script.onerror = () => {
+      resolve(false)
+    }
+    document.head.appendChild(script)
+  }).finally(() => {
+    if (!getRuntimeGlobal(globalName)) {
+      runtimeScriptTasks.delete(src)
+    }
+  })
+
+  runtimeScriptTasks.set(src, task)
+  return task
+}
+
+async function ensureLive2DRuntime(): Promise<boolean> {
+  if (live2DModelCtor) return true
+
+  logLive2D('info', `Live2D 运行时准备开始: cubismCore=${cubismCoreRuntimeUrl}`)
+  ;(window as any).PIXI = PIXI
+  const coreReady = await loadGlobalRuntimeScript(cubismCoreRuntimeUrl, 'Live2DCubismCore')
+  if (!coreReady) {
+    logLive2D('error', 'Live2D 运行时加载失败：Cubism Core 未就绪')
+    return false
+  }
+  logLive2D('info', 'Live2D Cubism Core 已就绪')
+
+  try {
+    const module = await import('pixi-live2d-display/cubism4')
+    live2DModelCtor = module.Live2DModel
+    motionPriorityNormal = module.MotionPriority.NORMAL
+    motionPriorityForce = module.MotionPriority.FORCE
+    logLive2D(
+      'info',
+      `Live2D cubism4 模块已加载: NORMAL=${motionPriorityNormal}, FORCE=${motionPriorityForce}`
+    )
+    try {
+      live2DModelCtor.registerTicker((PIXI as any).Ticker)
+    } catch {
+      // ignore duplicated ticker registration
+    }
+    return true
+  } catch (error) {
+    logLive2D('error', `Live2D 运行时初始化失败: ${describeError(error)}`)
+    return false
+  }
+}
 
 function toFileUrl(normalizedPath: string): string {
   const url = new URL('file:///')
@@ -50,10 +132,11 @@ function toModelUrls(inputPath: string): string[] {
 
   const normalized = modelPath.replace(/\\/g, '/')
   const legacy = /^[a-zA-Z]:\//.test(normalized) ? `file:///${normalized}` : `file://${normalized}`
-  return Array.from(new Set([toFileUrl(normalized), legacy, encodeURI(legacy)]))
+  const escapedLegacy = encodeURI(legacy).replace(/#/g, '%23').replace(/\?/g, '%3F')
+  return Array.from(new Set([toFileUrl(normalized), legacy, escapedLegacy]))
 }
 
-function resolveModelSize(model: Live2DModel): { width: number; height: number } {
+function resolveModelSize(model: Live2DModelType): { width: number; height: number } {
   const fallback = {
     width: Math.max(1, model.width),
     height: Math.max(1, model.height),
@@ -68,7 +151,7 @@ function resolveModelSize(model: Live2DModel): { width: number; height: number }
   }
 }
 
-function fitModel(model: Live2DModel) {
+function fitModel(model: Live2DModelType, reason = 'fit') {
   if (!pixiApp) return
 
   const stageWidth = window.innerWidth
@@ -83,20 +166,26 @@ function fitModel(model: Live2DModel) {
   model.y = stageHeight - 6
   baseX = model.x
   baseRotation = model.rotation
+  if (reason !== 'resize') {
+    logLive2D(
+      'info',
+      `Live2D 模型布局完成: reason=${reason}, stage=${stageWidth}x${stageHeight}, model=${modelWidth.toFixed(1)}x${modelHeight.toFixed(1)}, scale=${scale.toFixed(3)}, pos=(${model.x.toFixed(1)},${model.y.toFixed(1)})`
+    )
+  }
 }
 
-function fitModelWithRetry(model: Live2DModel) {
-  fitModel(model)
+function fitModelWithRetry(model: Live2DModelType) {
+  fitModel(model, 'initial')
   for (const delay of [120, 360, 900]) {
     const timer = setTimeout(() => {
       if (currentModel !== model) return
-      fitModel(model)
+      fitModel(model, `retry-${delay}ms`)
     }, delay)
     cleanups.push(() => clearTimeout(timer))
   }
 }
 
-async function playInitialMotion(model: Live2DModel) {
+async function playInitialMotion(model: Live2DModelType) {
   const motionMap = configStore.config.live2dActionMap?.motion || {}
   const motionNames = Object.values(motionMap)
   if (motionNames.length === 0) return
@@ -110,7 +199,7 @@ async function playInitialMotion(model: Live2DModel) {
   if (!preferred) return
 
   try {
-    await model.motion(preferred, undefined, MotionPriority.NORMAL)
+    await model.motion(preferred, undefined, motionPriorityNormal)
     void window.electronAPI.app.log.add('info', `Live2D 初始动作已播放: ${preferred}`, 'live2d')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -121,7 +210,12 @@ async function playInitialMotion(model: Live2DModel) {
 async function loadModel(modelPath: string) {
   if (!pixiApp || !modelPath) return
 
+  logLive2D('info', `Live2D 模型加载请求: ${modelPath}`)
+  const runtimeReady = await ensureLive2DRuntime()
+  if (!runtimeReady || !live2DModelCtor) return
+
   const urls = toModelUrls(modelPath)
+  logLive2D('info', `Live2D 模型候选路径: ${urls.join(' || ')}`)
   if (urls.length === 0) return
 
   try {
@@ -131,18 +225,40 @@ async function loadModel(modelPath: string) {
       currentModel = null
     }
 
-    let model: Live2DModel | null = null
+    let model: Live2DModelType | null = null
     const attemptErrors: string[] = []
     for (const url of urls) {
+      const probeStart = performance.now()
       try {
-        model = await Live2DModel.from(url)
-        if (url !== urls[0]) {
-          void window.electronAPI.app.log.add('warn', `Live2D 模型已使用回退路径加载: ${url}`, 'live2d')
+        const response = await fetch(url, { cache: 'no-store' })
+        const elapsed = (performance.now() - probeStart).toFixed(1)
+        if (response.ok) {
+          logLive2D(
+            'info',
+            `Live2D 模型探测成功: ${url} | status=${response.status} | cost=${elapsed}ms`
+          )
+        } else {
+          logLive2D(
+            'warn',
+            `Live2D 模型探测返回非2xx: ${url} | status=${response.status} | cost=${elapsed}ms`
+          )
+        }
+      } catch (probeError) {
+        logLive2D('warn', `Live2D 模型探测失败: ${url} | ${describeError(probeError)}`)
+      }
+
+      try {
+        model = await live2DModelCtor.from(url)
+        if (url === urls[0]) {
+          logLive2D('info', `Live2D 模型已从主路径加载: ${url}`)
+        } else {
+          logLive2D('warn', `Live2D 模型已使用回退路径加载: ${url}`)
         }
         break
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        attemptErrors.push(`${url} => ${message}`)
+        const detail = describeError(error)
+        attemptErrors.push(`${url} => ${detail}`)
+        logLive2D('warn', `Live2D 模型路径加载失败: ${url} | ${detail}`)
       }
     }
     if (!model) {
@@ -154,15 +270,19 @@ async function loadModel(modelPath: string) {
     pixiApp.stage.addChild(model as any)
     fitModelWithRetry(model)
     await playInitialMotion(model)
-    void window.electronAPI.app.log.add('info', `Live2D 模型加载成功: ${modelPath}`, 'live2d')
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    void window.electronAPI.app.log.add('warn', `Live2D 模型加载异常详情: ${message}`, 'live2d')
-    void window.electronAPI.app.log.add(
-      'error',
-      `Live2D 模型加载失败: ${modelPath} | ${message}`,
-      'live2d'
+    const textureCount = Array.isArray((model as any).textures) ? (model as any).textures.length : 0
+    const motionGroupCount = Object.keys((model as any)?.internalModel?.motionManager?.definitions || {}).length
+    const expressionCount = Array.isArray((model as any)?.internalModel?.expressionManager?.definitions)
+      ? (model as any).internalModel.expressionManager.definitions.length
+      : 0
+    logLive2D(
+      'info',
+      `Live2D 模型加载成功: ${modelPath} | texture=${textureCount}, motionGroup=${motionGroupCount}, expression=${expressionCount}`
     )
+  } catch (error) {
+    const detail = describeError(error)
+    logLive2D('warn', `Live2D 模型加载异常详情: ${detail}`)
+    logLive2D('error', `Live2D 模型加载失败: ${modelPath} | ${detail}`)
   }
 }
 
@@ -191,11 +311,12 @@ async function performAction(action: Live2DAction) {
     }
 
     if (action.type === 'motion') {
-      const priority = action.priority === 3 ? MotionPriority.FORCE : MotionPriority.NORMAL
+      const priority = action.priority === 3 ? motionPriorityForce : motionPriorityNormal
       await currentModel.motion(resolveMappedActionName(action), undefined, priority)
       return
     }
   } catch (error) {
+    logLive2D('warn', `Live2D 动作执行失败: ${JSON.stringify(action)} | ${describeError(error)}`)
     console.warn('[Live2D] 动作执行失败:', error)
   }
 }
@@ -211,7 +332,7 @@ function showReply(text: string) {
 function handleResize() {
   if (!pixiApp || !currentModel) return
   pixiApp.renderer.resize(window.innerWidth, window.innerHeight)
-  fitModel(currentModel)
+  fitModel(currentModel, 'resize')
 }
 
 function handleMouseMove(event: MouseEvent) {
@@ -231,13 +352,7 @@ function handleClick(event: MouseEvent) {
 onMounted(async () => {
   if (!canvasRef.value) return
 
-  ;(window as any).PIXI = PIXI
-  try {
-    Live2DModel.registerTicker((PIXI as any).Ticker)
-  } catch {
-    // ignore duplicated ticker registration
-  }
-
+  logLive2D('info', 'Live2D 页面挂载')
   document.body.classList.add('live2d-page')
 
   pixiApp = new PIXI.Application({
@@ -249,8 +364,11 @@ onMounted(async () => {
   })
 
   await configStore.loadConfig()
+  await ensureLive2DRuntime()
   if (configStore.config.live2dModelPath) {
     await loadModel(configStore.config.live2dModelPath)
+  } else {
+    logLive2D('warn', 'Live2D 页面启动时未配置模型路径')
   }
 
   idleTicker = (delta: number) => {
@@ -270,6 +388,7 @@ onMounted(async () => {
     performAction(action)
   })
   const offLoadModel = window.electronAPI.live2d.onLoadModel((modelPath: string) => {
+    logLive2D('info', `收到 Live2D 切换模型事件: ${modelPath}`)
     loadModel(modelPath)
   })
   const offShowReply = window.electronAPI.live2d.onShowReply((text: string) => {

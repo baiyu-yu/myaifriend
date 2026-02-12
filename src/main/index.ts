@@ -332,7 +332,13 @@ class Application {
 
     this.live2dWindow.webContents.on('did-finish-load', () => {
       const modelPath = this.configManager.getAll().live2dModelPath
+      this.addRuntimeLog(
+        'info',
+        `Live2D 窗口完成加载: hasModel=${Boolean(modelPath)} visible=${this.live2dWindow?.isVisible()}`,
+        'live2d'
+      )
       if (modelPath) {
+        this.addRuntimeLog('info', `Live2D 窗口初始化下发模型: ${modelPath}`, 'live2d')
         this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
       }
     })
@@ -865,9 +871,11 @@ class Application {
       if (key === 'live2dModelPath' && typeof value === 'string') {
         const modelPath = String(nextValue || '')
         if (modelPath) {
+          this.addRuntimeLog('info', `配置变更触发 Live2D 切换模型: ${modelPath}`, 'live2d')
           this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
           this.live2dWindow?.show()
         } else {
+          this.addRuntimeLog('warn', '配置已清空 Live2D 模型路径，窗口将隐藏', 'live2d')
           this.live2dWindow?.hide()
         }
       }
@@ -935,6 +943,7 @@ class Application {
       this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_ACTION, action)
     })
     ipcMain.handle(IPC_CHANNELS.LIVE2D_LOAD_MODEL, (_e, modelPath: string) => {
+      this.addRuntimeLog('info', `IPC 收到 Live2D 加载请求: ${modelPath}`, 'live2d')
       this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
     })
     ipcMain.handle(IPC_CHANNELS.LIVE2D_SHOW_REPLY, (_e, text: string) => {
