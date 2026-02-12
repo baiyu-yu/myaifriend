@@ -1,8 +1,9 @@
 <template>
   <div class="cover-page">
     <div class="cover-card">
-      <div class="app-mark">AI</div>
-      <h1>AI Bot</h1>
+      <img v-if="appIconDataUrl" class="app-icon" :src="appIconDataUrl" alt="App Icon" />
+      <div v-else class="app-mark">AI</div>
+      <h1>{{ appName }}</h1>
       <p>桌面智能助理</p>
       <div class="actions">
         <el-button type="primary" @click="openSettings">进入设置中心</el-button>
@@ -12,9 +13,22 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
+const appName = ref('AI Bot')
+const appIconDataUrl = ref('')
+
+onMounted(async () => {
+  try {
+    const meta = await window.electronAPI.app.getMeta()
+    if (meta?.name) appName.value = meta.name
+    if (meta?.iconDataUrl) appIconDataUrl.value = meta.iconDataUrl
+  } catch {
+    // keep fallback values
+  }
+})
 
 function openSettings() {
   router.push('/')
@@ -59,6 +73,15 @@ function openSettings() {
   box-shadow: 0 10px 20px rgba(15, 118, 110, 0.3);
 }
 
+.app-icon {
+  width: 74px;
+  height: 74px;
+  margin: 0 auto 14px;
+  object-fit: contain;
+  border-radius: 16px;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.2);
+}
+
 h1 {
   margin: 0;
   font-size: 30px;
@@ -75,4 +98,3 @@ p {
   margin-top: 24px;
 }
 </style>
-

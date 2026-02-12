@@ -135,10 +135,21 @@
           <el-form-item label="模型文件">
             <el-input v-model="configStore.config.live2dModelPath" placeholder="选择 .model3.json 文件" readonly>
               <template #append>
-                <el-button @click="selectLive2DModelFile">选文件</el-button>
-                <el-button @click="selectLive2DModelFolder">选文件夹</el-button>
+                <el-button @click="selectLive2DModelPath">选择模型路径</el-button>
               </template>
             </el-input>
+          </el-form-item>
+          <el-form-item label="待机轻微晃动">
+            <el-switch v-model="configStore.config.live2dBehavior.enableIdleSway" />
+          </el-form-item>
+          <el-form-item label="晃动幅度">
+            <el-input-number v-model="configStore.config.live2dBehavior.idleSwayAmplitude" :min="1" :max="30" />
+          </el-form-item>
+          <el-form-item label="晃动速度">
+            <el-input-number v-model="configStore.config.live2dBehavior.idleSwaySpeed" :min="0.1" :max="3" :step="0.1" :precision="1" />
+          </el-form-item>
+          <el-form-item label="眼部鼠标追踪">
+            <el-switch v-model="configStore.config.live2dBehavior.enableEyeTracking" />
           </el-form-item>
           <el-form-item label="窗口宽度">
             <el-input-number v-model="configStore.config.window.live2dWidth" :min="120" :max="1200" />
@@ -528,30 +539,23 @@ async function removeWatchFolder(index: number) {
   ElMessage.success('已移除监听文件夹')
 }
 
-async function selectLive2DModelFile() {
+async function selectLive2DModelPath() {
   const api = getElectronAPIOrNotify()
   if (!api) return
-  const file = await api.dialog.selectFile([{ name: 'Live2D Model JSON', extensions: ['json'] }])
-  if (file) {
-    configStore.config.live2dModelPath = file
-    ElMessage.success('已选择 Live2D 模型文件')
-  }
-}
-
-async function selectLive2DModelFolder() {
-  const api = getElectronAPIOrNotify()
-  if (!api) return
-  const folder = await api.dialog.selectFolder()
-  if (folder) {
-    configStore.config.live2dModelPath = folder
-    ElMessage.success('已选择 Live2D 模型文件夹')
+  const selectedPath = await api.dialog.selectPath()
+  if (selectedPath) {
+    configStore.config.live2dModelPath = selectedPath
+    ElMessage.success('已选择 Live2D 模型路径')
   }
 }
 
 async function saveLive2DConfig() {
   try {
     await configStore.setConfig('live2dModelPath', configStore.config.live2dModelPath)
+    await configStore.setConfig('live2dBehavior', { ...configStore.config.live2dBehavior })
     await configStore.setConfig('window', { ...configStore.config.window })
+    await configStore.loadConfig()
+    syncActionMapRowsFromConfig()
     ElMessage.success('Live2D 配置已保存')
   } catch (error) {
     ElMessage.error(`Live2D 配置保存失败：${error instanceof Error ? error.message : String(error)}`)

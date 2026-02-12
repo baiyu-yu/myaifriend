@@ -424,12 +424,68 @@ class Application {
     throw new Error('无效的模型路径')
   }
 
+  private async loadLive2DActionMap(modelPath: string): Promise<{
+    expression: Record<string, string>
+    motion: Record<string, string>
+  }> {
+    try {
+      const raw = await fs.promises.readFile(modelPath, 'utf-8')
+      const json = JSON.parse(raw)
+      const expression: Record<string, string> = {}
+      const motion: Record<string, string> = {}
+
+      const expressionsV3 = json?.FileReferences?.Expressions
+      const expressionsV2 = json?.expressions
+      const expressionList = Array.isArray(expressionsV3) ? expressionsV3 : Array.isArray(expressionsV2) ? expressionsV2 : []
+      for (const item of expressionList) {
+        const name = String(item?.Name || item?.name || '').trim()
+        if (name) expression[name] = name
+      }
+
+      const motionsV3 = json?.FileReferences?.Motions
+      const motionsV2 = json?.motions
+      const motionObj =
+        motionsV3 && typeof motionsV3 === 'object' ? motionsV3 : motionsV2 && typeof motionsV2 === 'object' ? motionsV2 : {}
+      for (const key of Object.keys(motionObj)) {
+        const name = String(key || '').trim()
+        if (name) motion[name] = name
+      }
+
+      return { expression, motion }
+    } catch {
+      return { expression: {}, motion: {} }
+    }
+  }
+
+  private toDataUrlByPath(filePath: string): string | null {
+    try {
+      if (!fs.existsSync(filePath)) return null
+      const ext = path.extname(filePath).toLowerCase()
+      const mime =
+        ext === '.png' ? 'image/png' : ext === '.ico' ? 'image/x-icon' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ''
+      if (!mime) return null
+      const content = fs.readFileSync(filePath).toString('base64')
+      return `data:${mime};base64,${content}`
+    } catch {
+      return null
+    }
+  }
+
   private registerIPCHandlers() {
     ipcMain.handle(IPC_CHANNELS.CONFIG_GET, (_e, key: string) => this.configManager.get(key))
     ipcMain.handle(IPC_CHANNELS.CONFIG_SET, async (_e, key: string, value: unknown) => {
       let nextValue: unknown = value
       if (key === 'live2dModelPath' && typeof value === 'string') {
         nextValue = await this.resolveLive2DModelPath(value)
+        if (nextValue) {
+          const parsed = await this.loadLive2DActionMap(String(nextValue))
+          const current = this.configManager.getAll().live2dActionMap
+          const merged = {
+            expression: { ...parsed.expression, ...current.expression },
+            motion: { ...parsed.motion, ...current.motion },
+          }
+          this.configManager.set('live2dActionMap', merged)
+        }
       }
       this.configManager.set(key, nextValue)
       let hotkeyResult:
@@ -566,6 +622,20 @@ class Application {
         filters,
       })
       return result.canceled ? null : result.filePaths[0]
+    })
+    ipcMain.handle(IPC_CHANNELS.DIALOG_SELECT_PATH, async (e) => {
+      const win = BrowserWindow.fromWebContents(e.sender) || this.mainWindow!
+      const result = await dialog.showOpenDialog(win, {
+        properties: ['openFile', 'openDirectory'],
+        filters: [{ name: 'Live2D Model JSON', extensions: ['json'] }],
+      })
+      return result.canceled ? null : result.filePaths[0]
+    })
+
+    ipcMain.handle(IPC_CHANNELS.APP_GET_META, () => {
+      const iconPath = this.resolveIconPath()
+      const iconDataUrl = iconPath ? this.toDataUrlByPath(iconPath) : null
+      return { name: 'AI Bot', iconDataUrl }
     })
   }
 

@@ -37,6 +37,12 @@ export const DEFAULT_CONFIG: AppConfig = {
     expression: {},
     motion: {},
   },
+  live2dBehavior: {
+    enableIdleSway: true,
+    idleSwayAmplitude: 8,
+    idleSwaySpeed: 0.8,
+    enableEyeTracking: false,
+  },
   webSearch: {
     allowDomains: [],
     blockDomains: [],

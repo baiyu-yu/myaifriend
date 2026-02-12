@@ -99,6 +99,11 @@ const electronAPI = {
   dialog: {
     selectFolder: () => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SELECT_FOLDER),
     selectFile: (filters?: Electron.FileFilter[]) => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SELECT_FILE, filters),
+    selectPath: () => ipcRenderer.invoke(IPC_CHANNELS.DIALOG_SELECT_PATH),
+  },
+
+  app: {
+    getMeta: () => ipcRenderer.invoke(IPC_CHANNELS.APP_GET_META),
   },
 }
 

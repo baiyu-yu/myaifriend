@@ -148,6 +148,12 @@ export interface AppConfig {
   triggerPrompts: Record<InvokeTrigger, string>
   live2dModelPath: string
   live2dActionMap: Live2DActionMap
+  live2dBehavior: {
+    enableIdleSway: boolean
+    idleSwayAmplitude: number
+    idleSwaySpeed: number
+    enableEyeTracking: boolean
+  }
   webSearch: {
     allowDomains: string[]
     blockDomains: string[]
@@ -236,4 +242,8 @@ export const IPC_CHANNELS = {
   // Dialog
   DIALOG_SELECT_FOLDER: 'dialog:selectFolder',
   DIALOG_SELECT_FILE: 'dialog:selectFile',
+  DIALOG_SELECT_PATH: 'dialog:selectPath',
+
+  // App
+  APP_GET_META: 'app:getMeta',
 } as const

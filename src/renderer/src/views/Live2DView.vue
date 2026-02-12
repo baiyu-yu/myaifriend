@@ -32,6 +32,8 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { Application } from 'pixi.js'
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display'
+import 'pixi-live2d-display/cubism2'
+import 'pixi-live2d-display/cubism4'
 import 'live2dcubismcore/live2dcubismcore.min.js'
 import type { Live2DAction } from '../../../common/types'
 import { useConfigStore } from '../stores/config'
@@ -48,6 +50,10 @@ const cleanups: Array<() => void> = []
 let pixiApp: Application | null = null
 let currentModel: Live2DModel | null = null
 let replyTimer: ReturnType<typeof setTimeout> | null = null
+let idleTicker: ((delta: number) => void) | null = null
+let baseX = 0
+let baseRotation = 0
+let swayTime = 0
 
 function handleCommand(command: string) {
   if (command === 'chat') {
@@ -88,6 +94,8 @@ function fitModel(model: Live2DModel) {
   model.anchor.set(0.5, 1)
   model.x = stageWidth / 2
   model.y = stageHeight - 6
+  baseX = model.x
+  baseRotation = model.rotation
 }
 
 async function loadModel(modelPath: string) {
@@ -167,6 +175,13 @@ function handleResize() {
   fitModel(currentModel)
 }
 
+function handleMouseMove(event: MouseEvent) {
+  if (!currentModel) return
+  if (configStore.config.live2dBehavior?.enableEyeTracking) {
+    currentModel.focus(event.clientX, event.clientY)
+  }
+}
+
 function handleClick(event: MouseEvent) {
   window.electronAPI.trigger.invoke({ trigger: 'click_avatar' })
   if (currentModel) {
@@ -190,6 +205,19 @@ onMounted(async () => {
     await loadModel(configStore.config.live2dModelPath)
   }
 
+  idleTicker = (delta: number) => {
+    if (!currentModel) return
+    const behavior = configStore.config.live2dBehavior
+    if (!behavior?.enableIdleSway) return
+
+    swayTime += delta / 60
+    const speed = Math.max(0.1, behavior.idleSwaySpeed || 0.8)
+    const amplitude = Math.max(0, behavior.idleSwayAmplitude || 0)
+    currentModel.x = baseX + Math.sin(swayTime * speed) * amplitude
+    currentModel.rotation = baseRotation + Math.sin(swayTime * speed * 0.7) * 0.01
+  }
+  pixiApp.ticker.add(idleTicker)
+
   const offAction = window.electronAPI.live2d.onAction((action: Live2DAction) => {
     performAction(action)
   })
@@ -202,11 +230,18 @@ onMounted(async () => {
   cleanups.push(offAction, offLoadModel, offShowReply)
 
   window.addEventListener('resize', handleResize)
+  window.addEventListener('mousemove', handleMouseMove)
   cleanups.push(() => window.removeEventListener('resize', handleResize))
+  cleanups.push(() => window.removeEventListener('mousemove', handleMouseMove))
 })
 
 onBeforeUnmount(() => {
   for (const off of cleanups) off()
+
+  if (pixiApp && idleTicker) {
+    pixiApp.ticker.remove(idleTicker)
+    idleTicker = null
+  }
 
   if (currentModel && pixiApp) {
     pixiApp.stage.removeChild(currentModel as any)
