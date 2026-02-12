@@ -9,23 +9,6 @@
       <div class="reply-content">{{ replyText }}</div>
     </div>
 
-    <div class="app-icon-menu">
-      <el-dropdown trigger="click" @command="handleCommand">
-        <div class="app-icon" @click.stop>
-          <svg viewBox="0 0 24 24" width="32" height="32" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"></path>
-            <path d="M12 6v6l4 2"></path>
-          </svg>
-        </div>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item command="chat">打开对话</el-dropdown-item>
-            <el-dropdown-item command="settings">设置中心</el-dropdown-item>
-            <el-dropdown-item command="quit" divided>退出程序</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
-    </div>
   </div>
 </template>
 
@@ -55,16 +38,6 @@ let idleTicker: ((delta: number) => void) | null = null
 let baseX = 0
 let baseRotation = 0
 let swayTime = 0
-
-function handleCommand(command: string) {
-  if (command === 'chat') {
-    window.electronAPI.window.toggleChat()
-  } else if (command === 'settings') {
-    window.electronAPI.window.openSettings()
-  } else if (command === 'quit') {
-    window.electronAPI.window.close()
-  }
-}
 
 function toModelUrl(inputPath: string): string {
   const modelPath = inputPath.trim()
@@ -273,9 +246,7 @@ onBeforeUnmount(() => {
   height: 100%;
   overflow: hidden;
   cursor: pointer;
-  background:
-    radial-gradient(900px 420px at -8% -8%, rgba(15, 118, 110, 0.24), transparent 58%),
-    radial-gradient(780px 360px at 112% 0%, rgba(217, 119, 6, 0.17), transparent 55%);
+  background: transparent;
 }
 
 .drag-bar {
@@ -354,31 +325,4 @@ canvas {
   }
 }
 
-.app-icon-menu {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 1001;
-  -webkit-app-region: no-drag;
-}
-
-.app-icon {
-  width: 32px;
-  height: 32px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(235, 250, 248, 0.92));
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  box-shadow: 0 8px 16px rgba(15, 23, 42, 0.2);
-  transition: all 0.2s;
-  color: #0f766e;
-}
-
-.app-icon:hover {
-  background-color: #fff;
-  transform: scale(1.1);
-  box-shadow: 0 12px 22px rgba(15, 23, 42, 0.24);
-}
 </style>

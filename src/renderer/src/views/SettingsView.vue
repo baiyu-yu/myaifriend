@@ -5,9 +5,12 @@
         <el-icon><Back /></el-icon>
       </el-button>
       <el-page-header content="设置中心" icon="" title="" @back="hideSettings" />
+      <el-button text class="collapse-btn" @click="toggleTabsCollapsed">
+        {{ tabsCollapsed ? '展开菜单' : '收起菜单' }}
+      </el-button>
     </div>
 
-    <el-tabs v-model="activeTab" class="tabs">
+    <el-tabs v-model="activeTab" tab-position="left" class="tabs" :class="{ collapsed: tabsCollapsed }">
       <el-tab-pane label="API 与模型配置" name="api">
         <el-button type="primary" @click="openApiDialogForCreate">新增 API</el-button>
         <el-table :data="configStore.apiConfigs" border stripe style="margin-top: 12px">
@@ -468,6 +471,7 @@ type RuntimeLogRow = {
 const configStore = useConfigStore()
 const router = useRouter()
 const activeTab = ref('api')
+const tabsCollapsed = ref(false)
 const fileChangeInfo = '{{fileChangeInfo}}'
 const taskTypeLabels = TASK_TYPE_LABELS
 
@@ -901,6 +905,10 @@ function hideSettings() {
   router.push('/cover')
 }
 
+function toggleTabsCollapsed() {
+  tabsCollapsed.value = !tabsCollapsed.value
+}
+
 onMounted(async () => {
   await configStore.loadConfig()
   syncActionMapRowsFromConfig()
@@ -951,6 +959,11 @@ onBeforeUnmount(() => {
   border-bottom: 1px dashed rgba(15, 23, 42, 0.12);
 }
 
+.collapse-btn {
+  margin-left: auto;
+  color: #0f766e;
+}
+
 .back-btn {
   font-size: 18px;
   background: linear-gradient(135deg, #e9f8f5 0%, #d7f2ed 100%);
@@ -960,6 +973,7 @@ onBeforeUnmount(() => {
 
 .tabs {
   margin-top: 14px;
+  min-height: calc(100vh - 170px);
   background: rgba(255, 255, 255, 0.78);
   padding: 16px;
   border-radius: 14px;
@@ -968,7 +982,10 @@ onBeforeUnmount(() => {
 }
 
 :deep(.el-tabs__header) {
-  margin-bottom: 14px;
+  margin-bottom: 0;
+  margin-right: 12px;
+  border-right: 1px solid rgba(15, 23, 42, 0.08);
+  padding-right: 8px;
 }
 
 :deep(.el-tabs__nav-scroll) {
@@ -1002,7 +1019,19 @@ onBeforeUnmount(() => {
 :deep(.el-tabs__active-bar) {
   background: linear-gradient(135deg, #0f766e, #115e59);
   border-radius: 999px;
-  height: 3px;
+  width: 3px;
+}
+
+.tabs.collapsed :deep(.el-tabs__header) {
+  width: 48px;
+}
+
+.tabs.collapsed :deep(.el-tabs__item) {
+  width: 36px;
+  padding-left: 0;
+  padding-right: 0;
+  justify-content: center;
+  font-size: 0;
 }
 
 .card-header {

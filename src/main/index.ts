@@ -487,12 +487,22 @@ class Application {
       const json = JSON.parse(raw)
       const expression: Record<string, string> = {}
       const motion: Record<string, string> = {}
+      const pickNameFromFile = (filePath: unknown): string => {
+        const file = String(filePath || '').trim()
+        if (!file) return ''
+        const base = path.basename(file)
+        return base
+          .replace(/\.motion3\.json$/i, '')
+          .replace(/\.exp3\.json$/i, '')
+          .replace(/\.mtn$/i, '')
+          .replace(/\.json$/i, '')
+      }
 
       const expressionsV3 = json?.FileReferences?.Expressions
       const expressionsV2 = json?.expressions
       const expressionList = Array.isArray(expressionsV3) ? expressionsV3 : Array.isArray(expressionsV2) ? expressionsV2 : []
       for (const item of expressionList) {
-        const name = String(item?.Name || item?.name || '').trim()
+        const name = String(item?.Name || item?.name || '').trim() || pickNameFromFile(item?.File || item?.file)
         if (name) expression[name] = name
       }
 
@@ -501,8 +511,13 @@ class Application {
       const motionObj =
         motionsV3 && typeof motionsV3 === 'object' ? motionsV3 : motionsV2 && typeof motionsV2 === 'object' ? motionsV2 : {}
       for (const key of Object.keys(motionObj)) {
-        const name = String(key || '').trim()
-        if (name) motion[name] = name
+        const groupName = String(key || '').trim()
+        if (groupName) motion[groupName] = groupName
+        const items = Array.isArray(motionObj[key]) ? motionObj[key] : []
+        for (const item of items) {
+          const motionName = pickNameFromFile(item?.File || item?.file)
+          if (motionName) motion[motionName] = motionName
+        }
       }
 
       return { expression, motion }
