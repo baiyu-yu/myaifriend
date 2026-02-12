@@ -236,7 +236,10 @@
       </el-tab-pane>
 
       <el-tab-pane label="文件夹监听" name="folders">
-        <el-button type="primary" @click="addWatchFolder">新增文件夹</el-button>
+        <div class="folder-toolbar">
+          <el-button type="primary" @click="addWatchFolder">新增文件夹</el-button>
+          <el-button @click="refreshWatchFolderContents">刷新监听内容</el-button>
+        </div>
         <el-table :data="watchFolderRows" border stripe style="margin-top: 12px">
           <el-table-column prop="path" label="路径" />
           <el-table-column label="操作" width="120">
@@ -245,6 +248,25 @@
             </template>
           </el-table-column>
         </el-table>
+        <el-divider content-position="left">监听目录内容（递归）</el-divider>
+        <div class="watch-folder-content-list">
+          <el-card v-for="item in watchFolderContents" :key="item.folderPath" class="watch-folder-content-card" shadow="never">
+            <div class="watch-folder-content-head">
+              <span class="watch-folder-content-path">{{ item.folderPath }}</span>
+              <el-tag size="small" :type="item.error ? 'danger' : 'success'">
+                {{ item.error ? '读取失败' : `共 ${item.items.length} 项` }}
+              </el-tag>
+            </div>
+            <el-skeleton v-if="item.loading" :rows="3" animated />
+            <el-alert v-else-if="item.error" :title="item.error" type="error" :closable="false" show-icon />
+            <el-scrollbar v-else height="180px" class="watch-folder-scroll">
+              <div v-if="item.items.length === 0" class="watch-folder-empty">（目录为空）</div>
+              <div v-for="(line, index) in item.items" :key="`${item.folderPath}-${index}`" class="watch-folder-line">
+                {{ line }}
+              </div>
+            </el-scrollbar>
+          </el-card>
+        </div>
       </el-tab-pane>
 
       <el-tab-pane label="快捷键" name="hotkeys">
@@ -491,6 +513,12 @@ type RuntimeLogRow = {
   source: string
   message: string
 }
+type WatchFolderContentRow = {
+  folderPath: string
+  items: string[]
+  loading: boolean
+  error: string
+}
 
 const configStore = useConfigStore()
 const router = useRouter()
@@ -606,6 +634,55 @@ async function saveChar() {
 }
 
 const watchFolderRows = computed(() => configStore.config.watchFolders.map((path) => ({ path })))
+const watchFolderContents = ref<WatchFolderContentRow[]>([])
+
+function parseWatchFolderItems(content: string): string[] {
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0)
+}
+
+async function refreshWatchFolderContents() {
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+
+  const folders = [...configStore.config.watchFolders]
+  if (folders.length === 0) {
+    watchFolderContents.value = []
+    return
+  }
+
+  watchFolderContents.value = folders.map((folderPath) => ({
+    folderPath,
+    items: [],
+    loading: true,
+    error: '',
+  }))
+
+  await Promise.all(
+    folders.map(async (folderPath, index) => {
+      try {
+        const result = await api.file.list(folderPath, true)
+        const content = typeof result?.content === 'string' ? result.content : ''
+        const isError = Boolean(result?.isError)
+        watchFolderContents.value[index] = {
+          folderPath,
+          items: isError ? [] : parseWatchFolderItems(content),
+          loading: false,
+          error: isError ? content || '读取目录失败' : '',
+        }
+      } catch (error) {
+        watchFolderContents.value[index] = {
+          folderPath,
+          items: [],
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+    })
+  )
+}
 
 async function addWatchFolder() {
   const api = getElectronAPIOrNotify()
@@ -613,12 +690,14 @@ async function addWatchFolder() {
   const folder = await api.dialog.selectFolder()
   if (!folder) return
   await configStore.setConfig('watchFolders', [...configStore.config.watchFolders, folder])
+  await refreshWatchFolderContents()
   ElMessage.success('已添加监听文件夹')
 }
 
 async function removeWatchFolder(index: number) {
   const next = configStore.config.watchFolders.filter((_, i) => i !== index)
   await configStore.setConfig('watchFolders', next)
+  await refreshWatchFolderContents()
   ElMessage.success('已移除监听文件夹')
 }
 
@@ -974,6 +1053,9 @@ onMounted(async () => {
 })
 
 watch(activeTab, (tab) => {
+  if (tab === 'folders') {
+    void refreshWatchFolderContents()
+  }
   if (tab === 'logs') {
     startLogAutoRefresh()
     return
@@ -993,6 +1075,15 @@ watch(
   () => configStore.config.live2dModelPath,
   (modelPath) => {
     selectedSavedModelPath.value = modelPath || ''
+  }
+)
+
+watch(
+  () => [...configStore.config.watchFolders],
+  () => {
+    if (activeTab.value === 'folders') {
+      void refreshWatchFolderContents()
+    }
   }
 )
 
@@ -1198,6 +1289,56 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 10px;
   width: 100%;
+}
+
+.folder-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.watch-folder-content-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.watch-folder-content-card {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.watch-folder-content-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.watch-folder-content-path {
+  font-size: 13px;
+  color: #334155;
+  word-break: break-all;
+}
+
+.watch-folder-scroll {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.watch-folder-line {
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #475569;
+  white-space: pre-wrap;
+}
+
+.watch-folder-empty {
+  font-size: 12px;
+  color: #64748b;
 }
 
 .mapping-header {

@@ -926,8 +926,8 @@ class Application {
     ipcMain.handle(IPC_CHANNELS.FILE_WRITE, async (_e, filePath: string, content: string) =>
       this.toolManager.execute('file_write', { path: filePath, content })
     )
-    ipcMain.handle(IPC_CHANNELS.FILE_LIST, async (_e, folderPath: string) =>
-      this.toolManager.execute('file_list', { path: folderPath })
+    ipcMain.handle(IPC_CHANNELS.FILE_LIST, async (_e, folderPath: string, recursive = false) =>
+      this.toolManager.execute('file_list', { path: folderPath, recursive: Boolean(recursive) })
     )
     ipcMain.handle(IPC_CHANNELS.FILE_OPEN_IN_BROWSER, async (_e, filePath: string) => shell.openPath(filePath))
 

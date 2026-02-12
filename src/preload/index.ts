@@ -44,7 +44,7 @@ const electronAPI = {
     read: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_READ, filePath),
     write: (filePath: string, content: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.FILE_WRITE, filePath, content),
-    list: (folderPath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_LIST, folderPath),
+    list: (folderPath: string, recursive = false) => ipcRenderer.invoke(IPC_CHANNELS.FILE_LIST, folderPath, recursive),
     openInBrowser: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.FILE_OPEN_IN_BROWSER, filePath),
   },
 

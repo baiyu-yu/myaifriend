@@ -50,28 +50,11 @@ export class FileWatcher {
     const watcher = chokidar.watch(folderPath, {
       persistent: true,
       ignoreInitial: true,
-      // 仅监听项目需要的文件类型，降低噪音与资源开销。
-      ignored: (filePath: string) => {
-        const ext = filePath.split('.').pop()?.toLowerCase()
-        if (!ext) return false
-        const allowed = [
-          'txt',
-          'doc',
-          'docx',
-          'xls',
-          'xlsx',
-          'html',
-          'htm',
-          'png',
-          'jpg',
-          'jpeg',
-          'gif',
-          'bmp',
-          'webp',
-        ]
-        return !allowed.includes(ext)
+      awaitWriteFinish: {
+        stabilityThreshold: 600,
+        pollInterval: 100,
       },
-      depth: 3,
+      ignorePermissionErrors: true,
     })
 
     watcher

@@ -45,7 +45,7 @@ export class FileListTool implements ITool {
       const fullPath = path.join(dirPath, entry.name)
       if (entry.isDirectory()) {
         result.push(`${indent}[DIR] ${entry.name}/`)
-        if (recursive && depth < 3) {
+        if (recursive) {
           const children = await this.listDir(fullPath, recursive, depth + 1)
           result.push(...children)
         }

@@ -12,7 +12,7 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { Application } from 'pixi.js'
+import * as PIXI from 'pixi.js'
 import { Live2DModel, MotionPriority } from 'pixi-live2d-display'
 import 'pixi-live2d-display/cubism2'
 import 'pixi-live2d-display/cubism4'
@@ -26,7 +26,7 @@ const replyText = ref('')
 const configStore = useConfigStore()
 const cleanups: Array<() => void> = []
 
-let pixiApp: Application | null = null
+let pixiApp: PIXI.Application | null = null
 let currentModel: Live2DModel | null = null
 let replyTimer: ReturnType<typeof setTimeout> | null = null
 let idleTicker: ((delta: number) => void) | null = null
@@ -34,19 +34,23 @@ let baseX = 0
 let baseRotation = 0
 let swayTime = 0
 
-function toModelUrl(inputPath: string): string {
+function toFileUrl(normalizedPath: string): string {
+  const url = new URL('file:///')
+  url.pathname = normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`
+  return url.toString()
+}
+
+function toModelUrls(inputPath: string): string[] {
   const modelPath = inputPath.trim()
-  if (!modelPath) return ''
+  if (!modelPath) return []
 
   if (/^https?:\/\//i.test(modelPath) || /^file:\/\//i.test(modelPath)) {
-    return modelPath
+    return [modelPath]
   }
 
   const normalized = modelPath.replace(/\\/g, '/')
-  if (/^[a-zA-Z]:\//.test(normalized)) {
-    return encodeURI(`file:///${normalized}`)
-  }
-  return encodeURI(`file://${normalized}`)
+  const legacy = /^[a-zA-Z]:\//.test(normalized) ? `file:///${normalized}` : `file://${normalized}`
+  return Array.from(new Set([toFileUrl(normalized), legacy, encodeURI(legacy)]))
 }
 
 function resolveModelSize(model: Live2DModel): { width: number; height: number } {
@@ -117,8 +121,8 @@ async function playInitialMotion(model: Live2DModel) {
 async function loadModel(modelPath: string) {
   if (!pixiApp || !modelPath) return
 
-  const url = toModelUrl(modelPath)
-  if (!url) return
+  const urls = toModelUrls(modelPath)
+  if (urls.length === 0) return
 
   try {
     if (currentModel) {
@@ -127,7 +131,24 @@ async function loadModel(modelPath: string) {
       currentModel = null
     }
 
-    const model = await Live2DModel.from(url)
+    let model: Live2DModel | null = null
+    const attemptErrors: string[] = []
+    for (const url of urls) {
+      try {
+        model = await Live2DModel.from(url)
+        if (url !== urls[0]) {
+          void window.electronAPI.app.log.add('warn', `Live2D 模型已使用回退路径加载: ${url}`, 'live2d')
+        }
+        break
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        attemptErrors.push(`${url} => ${message}`)
+      }
+    }
+    if (!model) {
+      throw new Error(attemptErrors.slice(0, 3).join(' | '))
+    }
+
     currentModel = model
     model.interactive = true
     pixiApp.stage.addChild(model as any)
@@ -210,9 +231,16 @@ function handleClick(event: MouseEvent) {
 onMounted(async () => {
   if (!canvasRef.value) return
 
+  ;(window as any).PIXI = PIXI
+  try {
+    Live2DModel.registerTicker((PIXI as any).Ticker)
+  } catch {
+    // ignore duplicated ticker registration
+  }
+
   document.body.classList.add('live2d-page')
 
-  pixiApp = new Application({
+  pixiApp = new PIXI.Application({
     view: canvasRef.value,
     backgroundAlpha: 0,
     antialias: true,
