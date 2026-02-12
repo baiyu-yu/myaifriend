@@ -278,13 +278,12 @@ class Application {
 
   private createLive2DWindow() {
     const config = this.configManager.getAll()
-    const hasModel = !!config.live2dModelPath
     const icon = this.resolveIconPath()
     const preload = this.resolvePreloadPath()
     this.live2dWindow = new BrowserWindow({
       width: config.window.live2dWidth,
       height: config.window.live2dHeight,
-      show: hasModel,
+      show: false,
       frame: false,
       transparent: true,
       alwaysOnTop: true,
@@ -726,8 +725,9 @@ class Application {
       this.migrateStorageFiles(previousDir, nextDir)
       this.saveStorageDir(nextDir)
       this.addRuntimeLog('info', `数据存储目录已改为: ${nextDir}，应用将重启`, 'storage')
+      this.isQuitting = true
       app.relaunch()
-      app.exit(0)
+      this.requestQuit()
       return { ok: true, restarting: true }
     })
   }

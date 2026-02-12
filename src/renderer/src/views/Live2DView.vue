@@ -1,5 +1,6 @@
 <template>
   <div class="live2d-container" @click="handleClick">
+    <div class="drag-bar" @click.stop />
     <canvas ref="canvasRef" />
     <div v-if="statusText && hasModel" class="status">{{ statusText }}</div>
     <div v-if="errorText" class="error">{{ errorText }}</div>
@@ -73,12 +74,12 @@ function toModelUrl(inputPath: string): string {
     return modelPath
   }
 
-  if (/^[a-zA-Z]:\\/.test(modelPath)) {
-    const normalized = modelPath.replace(/\\/g, '/')
-    return encodeURI(`file:///${normalized}`)
+  const normalized = modelPath.replace(/\\/g, '/')
+  const segments = normalized.split('/').map((seg, i) => (i === 0 && /^[a-zA-Z]:$/.test(seg) ? seg : encodeURIComponent(seg)))
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    return `file:///${segments.join('/')}`
   }
-
-  return encodeURI(`file://${modelPath.replace(/\\/g, '/')}`)
+  return `file://${segments.join('/')}`
 }
 
 function fitModel(model: Live2DModel) {
@@ -277,6 +278,16 @@ onBeforeUnmount(() => {
     radial-gradient(780px 360px at 112% 0%, rgba(217, 119, 6, 0.17), transparent 55%);
 }
 
+.drag-bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 28px;
+  z-index: 900;
+  -webkit-app-region: drag;
+}
+
 canvas {
   width: 100%;
   height: 100%;
@@ -347,7 +358,7 @@ canvas {
   position: absolute;
   top: 10px;
   right: 10px;
-  z-index: 1000;
+  z-index: 1001;
   -webkit-app-region: no-drag;
 }
 
