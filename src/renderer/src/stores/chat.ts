@@ -14,6 +14,10 @@ function formatNowForTitle(): string {
   return `${yy}-${mm}-${dd} ${hh}:${mi}`
 }
 
+function toPlain<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
 export const useChatStore = defineStore('chat', () => {
   const messages = ref<ChatMessage[]>([])
   const isLoading = ref(false)
@@ -52,6 +56,16 @@ export const useChatStore = defineStore('chat', () => {
 
   async function refreshConversationList() {
     conversations.value = await (await getElectronAPI()).chat.historyList()
+  }
+
+  async function addChatLog(level: 'info' | 'warn' | 'error', message: string) {
+    const api = window.electronAPI
+    if (!api?.app?.log?.add) return
+    try {
+      await api.app.log.add(level, message, 'chat')
+    } catch {
+      // ignore log failure
+    }
   }
 
   async function initConversation() {
@@ -94,7 +108,7 @@ export const useChatStore = defineStore('chat', () => {
       ...current,
       title: titleOverride || current.title,
       characterId: configStore.config.activeCharacterId,
-      messages: [...messages.value],
+      messages: toPlain(messages.value),
       updatedAt: Date.now(),
     }
     await (await getElectronAPI()).chat.historySave(updated)
@@ -141,6 +155,7 @@ export const useChatStore = defineStore('chat', () => {
     const titleCandidate = firstUserMsg ? firstUserMsg.content.slice(0, 20) : undefined
 
     try {
+      await addChatLog('info', `发送消息: ${trimmed.slice(0, 80)}`)
       const char = configStore.activeCharacter
       const apiMessages: ChatMessage[] = []
 
@@ -155,7 +170,8 @@ export const useChatStore = defineStore('chat', () => {
 
       apiMessages.push(...messages.value)
 
-      const response = await (await getElectronAPI()).chat.send(apiMessages)
+      const api = await getElectronAPI()
+      const response = await api.chat.send(toPlain(apiMessages))
       const choice = response.choices?.[0]
       const inference = response.meta
 
@@ -178,7 +194,8 @@ export const useChatStore = defineStore('chat', () => {
 
           const toolCalls = assistantMsg.toolCalls || []
           for (const toolCall of toolCalls) {
-            const result = await (await getElectronAPI()).tools.execute(toolCall.name, toolCall.arguments)
+            const safeArgs = toPlain(toolCall.arguments || {})
+            const result = await api.tools.execute(toolCall.name, safeArgs)
             messages.value.push({
               id: uuidv4(),
               role: 'tool',
@@ -194,7 +211,7 @@ export const useChatStore = defineStore('chat', () => {
               : []),
             ...messages.value,
           ]
-          const followUp = await (await getElectronAPI()).chat.send(followUpMessages)
+          const followUp = await api.chat.send(toPlain(followUpMessages))
           const followUpChoice = followUp.choices?.[0]
           if (followUpChoice?.message?.content) {
             messages.value.push({
@@ -209,7 +226,9 @@ export const useChatStore = defineStore('chat', () => {
           messages.value.push(assistantMsg)
         }
       }
+      await addChatLog('info', 'AI 回复完成')
     } catch (error) {
+      await addChatLog('error', `发送或触发失败: ${error instanceof Error ? error.message : String(error)}`)
       messages.value.push({
         id: uuidv4(),
         role: 'assistant',
@@ -225,6 +244,7 @@ export const useChatStore = defineStore('chat', () => {
   async function handleTrigger(context: InvokeContext) {
     const config = configStore.config
     let prompt = config.triggerPrompts[context.trigger] || ''
+    await addChatLog('info', `收到触发: ${context.trigger}`)
 
     if (context.fileChangeInfo) {
       prompt = prompt.replace(
@@ -234,6 +254,7 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (prompt) {
+      await addChatLog('info', `触发提示词已生成: ${prompt.slice(0, 120)}`)
       await sendMessage(prompt)
       // If triggered by non-dialog means and Live2D has a model, show reply below avatar
       if (context.trigger !== 'text_input' && config.live2dModelPath) {

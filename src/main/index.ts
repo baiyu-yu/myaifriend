@@ -77,6 +77,18 @@ class Application {
     return String(error)
   }
 
+  private summarizeInvokeContext(ctx: InvokeContext): string {
+    if (ctx.trigger === 'file_change' && ctx.fileChangeInfo) {
+      return `${ctx.trigger} | ${ctx.fileChangeInfo.type} | ${ctx.fileChangeInfo.filePath}`
+    }
+    return ctx.trigger
+  }
+
+  private dispatchTrigger(ctx: InvokeContext, source = 'trigger') {
+    this.addRuntimeLog('info', `AI 触发请求: ${this.summarizeInvokeContext(ctx)}`, source)
+    this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
+  }
+
   private toIPCData<T>(value: T): T {
     try {
       return structuredClone(value)
@@ -930,7 +942,7 @@ class Application {
     })
 
     ipcMain.handle(IPC_CHANNELS.TRIGGER_INVOKE, (_e, ctx: InvokeContext) => {
-      this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
+      this.dispatchTrigger(ctx, 'trigger-ipc')
     })
 
     ipcMain.handle(IPC_CHANNELS.WINDOW_TOGGLE_CHAT, () => this.toggleChatWindow())
@@ -1029,14 +1041,16 @@ class Application {
   private startFileWatcher() {
     const config = this.configManager.getAll()
     for (const folder of config.watchFolders) {
+      this.addRuntimeLog('info', `开始监听目录: ${folder}`, 'watcher')
       this.fileWatcher.watch(folder, (eventType, filePath) => {
         const data = { type: eventType, path: filePath }
+        this.addRuntimeLog('info', `文件变动事件: ${eventType} | ${filePath}`, 'watcher')
         this.chatWindow?.webContents.send(IPC_CHANNELS.FILE_WATCH_EVENT, data)
         const ctx: InvokeContext = {
           trigger: 'file_change',
           fileChangeInfo: { type: eventType as 'add' | 'change' | 'unlink', filePath },
         }
-        this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
+        this.dispatchTrigger(ctx, 'watcher')
       })
     }
   }
@@ -1045,9 +1059,10 @@ class Application {
     const config = this.configManager.getAll()
     const { min, max } = config.randomTimerRange
     const delay = (Math.random() * (max - min) + min) * 60 * 1000
+    this.addRuntimeLog('info', `随机触发计时已设置: ${(delay / 1000 / 60).toFixed(2)} 分钟后`, 'trigger-timer')
     this.randomTimer = setTimeout(() => {
       const ctx: InvokeContext = { trigger: 'random_timer' }
-      this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
+      this.dispatchTrigger(ctx, 'trigger-timer')
       if (this.chatWindow && !this.chatWindow.isVisible()) {
         this.chatWindow.show()
       }

@@ -108,7 +108,7 @@ onMounted(async () => {
     return
   }
   api.on.triggerInvoke((context: InvokeContext) => {
-    chatStore.handleTrigger(context)
+    void chatStore.handleTrigger(context)
   })
 })
 

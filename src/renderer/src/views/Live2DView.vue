@@ -43,11 +43,25 @@ function toModelUrl(inputPath: string): string {
   }
 
   const normalized = modelPath.replace(/\\/g, '/')
-  const segments = normalized.split('/').map((seg, i) => (i === 0 && /^[a-zA-Z]:$/.test(seg) ? seg : encodeURIComponent(seg)))
   if (/^[a-zA-Z]:\//.test(normalized)) {
-    return `file:///${segments.join('/')}`
+    return encodeURI(`file:///${normalized}`)
   }
-  return `file://${segments.join('/')}`
+  return encodeURI(`file://${normalized}`)
+}
+
+function resolveModelSize(model: Live2DModel): { width: number; height: number } {
+  const fallback = {
+    width: Math.max(1, model.width),
+    height: Math.max(1, model.height),
+  }
+  try {
+    const bounds = model.getLocalBounds()
+    const width = Number.isFinite(bounds?.width) ? Math.max(1, bounds.width) : fallback.width
+    const height = Number.isFinite(bounds?.height) ? Math.max(1, bounds.height) : fallback.height
+    return { width, height }
+  } catch {
+    return fallback
+  }
 }
 
 function fitModel(model: Live2DModel) {
@@ -55,16 +69,49 @@ function fitModel(model: Live2DModel) {
 
   const stageWidth = window.innerWidth
   const stageHeight = window.innerHeight
-  const modelWidth = Math.max(1, model.width)
-  const modelHeight = Math.max(1, model.height)
+  const { width: modelWidth, height: modelHeight } = resolveModelSize(model)
 
-  const scale = Math.min((stageWidth * 0.85) / modelWidth, (stageHeight * 0.9) / modelHeight)
+  const rawScale = Math.min((stageWidth * 0.85) / modelWidth, (stageHeight * 0.9) / modelHeight)
+  const scale = Number.isFinite(rawScale) ? Math.min(3, Math.max(0.05, rawScale)) : 0.4
   model.scale.set(scale)
   model.anchor.set(0.5, 1)
   model.x = stageWidth / 2
   model.y = stageHeight - 6
   baseX = model.x
   baseRotation = model.rotation
+}
+
+function fitModelWithRetry(model: Live2DModel) {
+  fitModel(model)
+  for (const delay of [120, 360, 900]) {
+    const timer = setTimeout(() => {
+      if (currentModel !== model) return
+      fitModel(model)
+    }, delay)
+    cleanups.push(() => clearTimeout(timer))
+  }
+}
+
+async function playInitialMotion(model: Live2DModel) {
+  const motionMap = configStore.config.live2dActionMap?.motion || {}
+  const motionNames = Object.values(motionMap)
+  if (motionNames.length === 0) return
+
+  const lowered = motionNames.map((name) => ({ raw: name, lower: name.toLowerCase() }))
+  const preferred =
+    lowered.find((item) => item.lower.includes('idle'))?.raw ||
+    lowered.find((item) => item.lower.includes('home'))?.raw ||
+    lowered.find((item) => item.lower.includes('login'))?.raw ||
+    lowered[0]?.raw
+  if (!preferred) return
+
+  try {
+    await model.motion(preferred, undefined, MotionPriority.NORMAL)
+    void window.electronAPI.app.log.add('info', `Live2D 初始动作已播放: ${preferred}`, 'live2d')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    void window.electronAPI.app.log.add('warn', `Live2D 初始动作播放失败: ${preferred} | ${message}`, 'live2d')
+  }
 }
 
 async function loadModel(modelPath: string) {
@@ -82,8 +129,10 @@ async function loadModel(modelPath: string) {
 
     const model = await Live2DModel.from(url)
     currentModel = model
+    model.interactive = true
     pixiApp.stage.addChild(model as any)
-    fitModel(model)
+    fitModelWithRetry(model)
+    await playInitialMotion(model)
     void window.electronAPI.app.log.add('info', `Live2D 模型加载成功: ${modelPath}`, 'live2d')
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
