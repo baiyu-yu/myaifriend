@@ -110,6 +110,10 @@ const electronAPI = {
       add: (level: 'info' | 'warn' | 'error', message: string, source?: string) =>
         ipcRenderer.invoke(IPC_CHANNELS.APP_LOG_ADD, level, message, source),
     },
+    storage: {
+      info: () => ipcRenderer.invoke(IPC_CHANNELS.APP_STORAGE_INFO),
+      set: (dirPath: string) => ipcRenderer.invoke(IPC_CHANNELS.APP_STORAGE_SET, dirPath),
+    },
   },
 }
 

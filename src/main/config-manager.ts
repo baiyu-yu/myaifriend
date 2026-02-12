@@ -33,15 +33,19 @@ function mergeConfig<T>(base: T, incoming: unknown): T {
 export class ConfigManager {
   private store: any
   private config: AppConfig
+  private storageDir: string
 
-  constructor() {
+  constructor(storageDir?: string) {
     const testCwd = path.join(process.cwd(), '.aibot-test-store', String(process.pid))
     if (!process.versions.electron) {
       fs.mkdirSync(testCwd, { recursive: true })
     }
+    this.storageDir = storageDir || testCwd
     const fallbackOptions =
       process.versions.electron
-        ? {}
+        ? storageDir
+          ? { cwd: storageDir }
+          : {}
         : {
             cwd: testCwd,
             projectVersion: '0.0.0',
@@ -83,5 +87,9 @@ export class ConfigManager {
   reset(): void {
     this.config = mergeConfig(DEFAULT_CONFIG, {})
     this.saveToDisk()
+  }
+
+  getStorageDir(): string {
+    return this.storageDir
   }
 }

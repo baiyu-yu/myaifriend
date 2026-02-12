@@ -10,14 +10,16 @@ type ConversationStoreShape = {
 export class ConversationManager {
   private store: any
 
-  constructor() {
+  constructor(storageDir?: string) {
     const testCwd = path.join(process.cwd(), '.aibot-test-store', String(process.pid))
     if (!process.versions.electron) {
       fs.mkdirSync(testCwd, { recursive: true })
     }
     const fallbackOptions =
       process.versions.electron
-        ? {}
+        ? storageDir
+          ? { cwd: storageDir }
+          : {}
         : {
             cwd: testCwd,
             projectVersion: '0.0.0',

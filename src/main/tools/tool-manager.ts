@@ -80,6 +80,7 @@ export class ToolManager {
     let loaded = 0
 
     try {
+      await fs.mkdir(pluginDir, { recursive: true })
       const entries = await fs.readdir(pluginDir, { withFileTypes: true })
       for (const entry of entries) {
         if (!entry.isFile()) continue

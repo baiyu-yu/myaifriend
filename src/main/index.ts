@@ -36,6 +36,7 @@ class Application {
   private persistWindowTimer: NodeJS.Timeout | null = null
   private isQuitting = false
   private runtimeLogs: AppLogEntry[] = []
+  private storageMetaPath = ''
 
   private registerShortcutWithFallback(
     shortcut: string,
@@ -103,7 +104,7 @@ class Application {
   }
 
   private async discoverPluginTools() {
-    const pluginDir = path.join(app.getPath('userData'), 'tools')
+    const pluginDir = path.join(this.configManager.getStorageDir(), 'tools')
     const discovery = await this.toolManager.discoverTools(pluginDir)
     if (discovery.errors.length > 0) {
       console.warn('[ToolManager] 插件加载告警:', discovery.errors)
@@ -117,12 +118,15 @@ class Application {
     await app.whenReady()
     app.setAppUserModelId('com.dice.aibot')
     Menu.setApplicationMenu(null)
+    this.storageMetaPath = path.join(app.getPath('userData'), 'storage-location.json')
+    const storageDir = this.resolveStorageDir()
+    fs.mkdirSync(storageDir, { recursive: true })
 
-    this.configManager = new ConfigManager()
-    this.conversationManager = new ConversationManager()
+    this.configManager = new ConfigManager(storageDir)
+    this.conversationManager = new ConversationManager(storageDir)
     this.toolManager = new ToolManager(() => this.configManager.getAll())
     this.aiEngine = new AIEngine(this.configManager)
-    this.memoryManager = new MemoryManager()
+    this.memoryManager = new MemoryManager(storageDir)
     this.fileWatcher = new FileWatcher()
 
     this.toolManager.registerBuiltinTools({
@@ -162,6 +166,35 @@ class Application {
     this.chatWindow?.destroy()
     this.live2dWindow?.destroy()
     app.quit()
+  }
+
+  private resolveStorageDir(): string {
+    const fallback = app.getPath('userData')
+    try {
+      if (!this.storageMetaPath || !fs.existsSync(this.storageMetaPath)) return fallback
+      const raw = fs.readFileSync(this.storageMetaPath, 'utf-8')
+      const parsed = JSON.parse(raw)
+      const next = String(parsed?.dataDir || '').trim()
+      return next || fallback
+    } catch {
+      return fallback
+    }
+  }
+
+  private saveStorageDir(dirPath: string) {
+    fs.writeFileSync(this.storageMetaPath, JSON.stringify({ dataDir: dirPath }, null, 2), 'utf-8')
+  }
+
+  private migrateStorageFiles(fromDir: string, toDir: string) {
+    if (!fromDir || !toDir || fromDir === toDir) return
+    fs.mkdirSync(toDir, { recursive: true })
+    const targets = ['aibot-config.json', 'aibot-conversations.json', 'aibot-memory.json']
+    for (const name of targets) {
+      const fromPath = path.join(fromDir, name)
+      const toPath = path.join(toDir, name)
+      if (!fs.existsSync(fromPath) || fs.existsSync(toPath)) continue
+      fs.copyFileSync(fromPath, toPath)
+    }
   }
 
   private openMainRoute(route: 'cover' | 'settings') {
@@ -498,7 +531,13 @@ class Application {
     ipcMain.handle(IPC_CHANNELS.CONFIG_SET, async (_e, key: string, value: unknown) => {
       let nextValue: unknown = value
       if (key === 'live2dModelPath' && typeof value === 'string') {
-        nextValue = await this.resolveLive2DModelPath(value)
+        try {
+          nextValue = await this.resolveLive2DModelPath(value)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          this.addRuntimeLog('error', `Live2D 模型路径解析失败: ${value} | ${message}`, 'live2d')
+          throw error
+        }
         if (nextValue) {
           const parsed = await this.loadLive2DActionMap(String(nextValue))
           const current = this.configManager.getAll().live2dActionMap
@@ -507,6 +546,11 @@ class Application {
             motion: { ...parsed.motion, ...current.motion },
           }
           this.configManager.set('live2dActionMap', merged)
+          this.addRuntimeLog(
+            'info',
+            `Live2D 映射已自动读取: expression ${Object.keys(parsed.expression).length} 项, motion ${Object.keys(parsed.motion).length} 项`,
+            'live2d'
+          )
         }
       }
       this.configManager.set(key, nextValue)
@@ -669,6 +713,23 @@ class Application {
       (_e, level: 'info' | 'warn' | 'error', message: string, source?: string) =>
         this.addRuntimeLog(level, message, source || 'renderer')
     )
+    ipcMain.handle(IPC_CHANNELS.APP_STORAGE_INFO, () => ({
+      currentDir: this.configManager.getStorageDir(),
+    }))
+    ipcMain.handle(IPC_CHANNELS.APP_STORAGE_SET, (_e, storageDir: string) => {
+      const nextDir = String(storageDir || '').trim()
+      if (!nextDir) {
+        throw new Error('存储目录不能为空')
+      }
+      fs.mkdirSync(nextDir, { recursive: true })
+      const previousDir = this.configManager.getStorageDir()
+      this.migrateStorageFiles(previousDir, nextDir)
+      this.saveStorageDir(nextDir)
+      this.addRuntimeLog('info', `数据存储目录已改为: ${nextDir}，应用将重启`, 'storage')
+      app.relaunch()
+      app.exit(0)
+      return { ok: true, restarting: true }
+    })
   }
 
   private startFileWatcher() {

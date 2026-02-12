@@ -325,19 +325,50 @@
 
       <el-tab-pane label="运行日志" name="logs">
         <div class="mapping-header" style="margin-bottom: 8px">
-          <el-button type="primary" @click="loadRuntimeLogs">刷新</el-button>
+          <div style="display: flex; gap: 8px; align-items: center">
+            <el-button type="primary" @click="loadRuntimeLogs">刷新</el-button>
+            <el-select v-model="logLevelFilter" style="width: 140px">
+              <el-option label="全部等级" value="all" />
+              <el-option label="INFO" value="info" />
+              <el-option label="WARN" value="warn" />
+              <el-option label="ERROR" value="error" />
+            </el-select>
+          </div>
           <el-button type="danger" plain @click="clearRuntimeLogs">清空日志</el-button>
         </div>
-        <el-table :data="runtimeLogs" border stripe>
+        <el-table :data="filteredRuntimeLogs" border stripe :row-class-name="runtimeLogRowClass">
           <el-table-column label="时间" width="180">
             <template #default="{ row }">
               {{ formatTime(row.timestamp) }}
             </template>
           </el-table-column>
-          <el-table-column prop="level" label="级别" width="90" />
+          <el-table-column label="级别" width="96">
+            <template #default="{ row }">
+              <el-tag :type="logLevelTagType(row.level)" effect="dark">{{ row.level.toUpperCase() }}</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="source" label="来源" width="130" />
           <el-table-column prop="message" label="内容" />
         </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane label="数据存储" name="storage">
+        <el-form label-width="140px" style="max-width: 920px">
+          <el-form-item label="当前目录">
+            <el-input v-model="storageDir" readonly placeholder="未获取" />
+          </el-form-item>
+          <el-form-item label="新目录">
+            <el-input v-model="pendingStorageDir" placeholder="请选择新的数据存储目录" readonly>
+              <template #append>
+                <el-button @click="selectStorageDir">选择目录</el-button>
+              </template>
+            </el-input>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="applyStorageDir">应用并重启</el-button>
+            <el-text type="info" style="margin-left: 8px">将迁移配置、会话和记忆数据到新目录</el-text>
+          </el-form-item>
+        </el-form>
       </el-tab-pane>
 
       <el-tab-pane label="唤起提示词" name="trigger">
@@ -409,7 +440,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { v4 as uuidv4 } from 'uuid'
 import { useConfigStore } from '../stores/config'
@@ -672,6 +703,10 @@ const toolsLoading = ref(false)
 const memoryRows = ref<MemoryRow[]>([])
 const memoriesLoading = ref(false)
 const runtimeLogs = ref<RuntimeLogRow[]>([])
+const logLevelFilter = ref<'all' | 'info' | 'warn' | 'error'>('all')
+const storageDir = ref('')
+const pendingStorageDir = ref('')
+let logRefreshTimer: ReturnType<typeof setInterval> | null = null
 const searchAllowDomainsInput = ref('')
 const searchBlockDomainsInput = ref('')
 const instinctMemoriesInput = ref('')
@@ -694,6 +729,10 @@ const memoryGroups = computed<MemoryGroupRow[]>(() => {
   }
   return Array.from(groupMap.values()).sort((a, b) => b.count - a.count)
 })
+
+const filteredRuntimeLogs = computed(() =>
+  runtimeLogs.value.filter((item) => logLevelFilter.value === 'all' || item.level === logLevelFilter.value)
+)
 
 async function loadTools() {
   const api = getElectronAPIOrNotify()
@@ -745,7 +784,8 @@ function formatTime(ts: number) {
   const dd = String(d.getDate()).padStart(2, '0')
   const hh = String(d.getHours()).padStart(2, '0')
   const mi = String(d.getMinutes()).padStart(2, '0')
-  return `${yy}-${mm}-${dd} ${hh}:${mi}`
+  const ss = String(d.getSeconds()).padStart(2, '0')
+  return `${yy}-${mm}-${dd} ${hh}:${mi}:${ss}`
 }
 
 async function loadMemories() {
@@ -789,12 +829,72 @@ async function loadRuntimeLogs() {
   runtimeLogs.value = await api.app.log.list()
 }
 
+function logLevelTagType(level: 'info' | 'warn' | 'error'): 'success' | 'warning' | 'danger' {
+  if (level === 'error') return 'danger'
+  if (level === 'warn') return 'warning'
+  return 'success'
+}
+
+function runtimeLogRowClass(args: { row: RuntimeLogRow }) {
+  if (args.row.level === 'error') return 'log-row-error'
+  if (args.row.level === 'warn') return 'log-row-warn'
+  return 'log-row-info'
+}
+
+function stopLogAutoRefresh() {
+  if (logRefreshTimer) {
+    clearInterval(logRefreshTimer)
+    logRefreshTimer = null
+  }
+}
+
+function startLogAutoRefresh() {
+  stopLogAutoRefresh()
+  loadRuntimeLogs()
+  logRefreshTimer = setInterval(() => {
+    void loadRuntimeLogs()
+  }, 1500)
+}
+
 async function clearRuntimeLogs() {
   const api = getElectronAPIOrNotify()
   if (!api) return
   await api.app.log.clear()
   runtimeLogs.value = []
   ElMessage.success('运行日志已清空')
+}
+
+async function loadStorageInfo() {
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  const info = await api.app.storage.info()
+  storageDir.value = info.currentDir || ''
+  if (!pendingStorageDir.value) {
+    pendingStorageDir.value = storageDir.value
+  }
+}
+
+async function selectStorageDir() {
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  const selected = await api.dialog.selectFolder()
+  if (!selected) return
+  pendingStorageDir.value = selected
+}
+
+async function applyStorageDir() {
+  const api = getElectronAPIOrNotify()
+  if (!api) return
+  const next = pendingStorageDir.value.trim()
+  if (!next) {
+    ElMessage.warning('请先选择目录')
+    return
+  }
+  if (next === storageDir.value) {
+    ElMessage.info('目录未变化')
+    return
+  }
+  await api.app.storage.set(next)
 }
 
 function hideSettings() {
@@ -809,7 +909,24 @@ onMounted(async () => {
   syncMemoryLayerInputs()
   await loadTools()
   await loadMemories()
-  await loadRuntimeLogs()
+  await loadStorageInfo()
+  if (activeTab.value === 'logs') {
+    startLogAutoRefresh()
+  } else {
+    await loadRuntimeLogs()
+  }
+})
+
+watch(activeTab, (tab) => {
+  if (tab === 'logs') {
+    startLogAutoRefresh()
+    return
+  }
+  stopLogAutoRefresh()
+})
+
+onBeforeUnmount(() => {
+  stopLogAutoRefresh()
 })
 </script>
 
@@ -977,6 +1094,18 @@ onMounted(async () => {
   background: rgba(15, 118, 110, 0.08);
   color: #1f2937;
   font-weight: 600;
+}
+
+:deep(.log-row-info .el-table__cell) {
+  background: rgba(15, 118, 110, 0.03);
+}
+
+:deep(.log-row-warn .el-table__cell) {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+:deep(.log-row-error .el-table__cell) {
+  background: rgba(239, 68, 68, 0.08);
 }
 
 @media (max-width: 768px) {

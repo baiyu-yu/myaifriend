@@ -141,6 +141,10 @@ export interface AppLogEntry {
   message: string
 }
 
+export interface AppStorageInfo {
+  currentDir: string
+}
+
 // --- App Config ---
 export interface AppConfig {
   apiConfigs: ApiConfig[]
@@ -257,4 +261,6 @@ export const IPC_CHANNELS = {
   APP_LOG_LIST: 'app:log:list',
   APP_LOG_CLEAR: 'app:log:clear',
   APP_LOG_ADD: 'app:log:add',
+  APP_STORAGE_INFO: 'app:storage:info',
+  APP_STORAGE_SET: 'app:storage:set',
 } as const
