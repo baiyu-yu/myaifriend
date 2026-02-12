@@ -1,7 +1,11 @@
 <template>
   <div class="live2d-container">
-    <div class="drag-bar" @click.stop @mousedown.stop="startDragWindow" />
-    <canvas ref="canvasRef" @click="handleClick" />
+    <canvas
+      ref="canvasRef"
+      @click="handleClick"
+      @mousedown.stop="startModelDrag"
+      @wheel.prevent="handleModelWheel"
+    />
 
     <div v-if="replyText" class="reply-bubble" @click.stop>
       <div class="reply-content">{{ replyText }}</div>
@@ -30,14 +34,6 @@
       </div>
     </div>
 
-    <div class="resize-handle top" @mousedown.stop.prevent="startResizeWindow('top', $event)" />
-    <div class="resize-handle right" @mousedown.stop.prevent="startResizeWindow('right', $event)" />
-    <div class="resize-handle bottom" @mousedown.stop.prevent="startResizeWindow('bottom', $event)" />
-    <div class="resize-handle left" @mousedown.stop.prevent="startResizeWindow('left', $event)" />
-    <div class="resize-handle top-left" @mousedown.stop.prevent="startResizeWindow('top-left', $event)" />
-    <div class="resize-handle top-right" @mousedown.stop.prevent="startResizeWindow('top-right', $event)" />
-    <div class="resize-handle bottom-left" @mousedown.stop.prevent="startResizeWindow('bottom-left', $event)" />
-    <div class="resize-handle bottom-right" @mousedown.stop.prevent="startResizeWindow('bottom-right', $event)" />
   </div>
 </template>
 
@@ -65,6 +61,7 @@ let currentModel: Live2DModelType | null = null
 let replyTimer: ReturnType<typeof setTimeout> | null = null
 let idleTicker: ((delta: number) => void) | null = null
 let baseX = 0
+let baseY = 0
 let baseRotation = 0
 let swayTime = 0
 let live2DModelCtor: typeof import('pixi-live2d-display/cubism4').Live2DModel | null = null
@@ -85,19 +82,13 @@ let focusCurrentY = focusTargetY
 let trackingMouseInside = false
 let lastPointerX = 0
 let lastPointerY = 0
-let draggingWindow = false
-let resizingEdge:
-  | 'top'
-  | 'right'
-  | 'bottom'
-  | 'left'
-  | 'top-left'
-  | 'top-right'
-  | 'bottom-left'
-  | 'bottom-right'
-  | null = null
+let modelDragging = false
+let modelDragMoved = false
+let modelDragOffsetX = 0
+let modelDragOffsetY = 0
+let modelTransformCustomized = false
+let lastScaleLogAt = 0
 let lastInteractionState = ''
-let removeDragResizeListeners: (() => void) | null = null
 let mousePassthroughEnabled = false
 
 function describeError(error: unknown): string {
@@ -358,7 +349,9 @@ function fitModel(model: Live2DModelType, reason = 'fit') {
   model.x = stageWidth / 2
   model.y = stageHeight - 6
   baseX = model.x
+  baseY = model.y
   baseRotation = model.rotation
+  modelTransformCustomized = false
   const shouldLog =
     reason === 'initial' || reason === 'retry-900ms' || reason === 'resize' || reason === 'fit'
   if (shouldLog) {
@@ -445,6 +438,7 @@ async function loadModel(modelPath: string) {
     patchRendererInteractionManager('after-model-created')
     model.interactive = true
     pixiApp.stage.addChild(model as any)
+    modelTransformCustomized = false
     fitModelWithRetry(model)
     await playInitialMotion(model)
     const textureCount = Array.isArray((model as any).textures) ? (model as any).textures.length : 0
@@ -494,7 +488,20 @@ function collectAvailableActionNames(type: 'expression' | 'motion'): string[] {
   if (!currentModel) return []
   if (type === 'motion') {
     const defs = (currentModel as any)?.internalModel?.motionManager?.definitions || {}
-    return Object.keys(defs).filter(Boolean)
+    const names = new Set<string>()
+    for (const [groupName, items] of Object.entries(defs)) {
+      const group = String(groupName || '').trim()
+      if (group) names.add(group)
+      const list = Array.isArray(items) ? items : []
+      for (const item of list) {
+        const raw = String((item as any)?.File || (item as any)?.file || (item as any)?.Name || (item as any)?.name || '')
+          .trim()
+        if (!raw) continue
+        names.add(raw)
+        names.add(raw.replace(/\.(motion3\.json|json|mtn)$/i, ''))
+      }
+    }
+    return Array.from(names)
   }
 
   const defs = (currentModel as any)?.internalModel?.expressionManager?.definitions
@@ -510,6 +517,64 @@ function collectAvailableActionNames(type: 'expression' | 'motion'): string[] {
     names.add(raw.replace(/\.(exp3\.json|json)$/i, ''))
   }
   return Array.from(names)
+}
+
+function findExpressionIndexByName(name: string): number {
+  if (!currentModel) return -1
+  const defs = (currentModel as any)?.internalModel?.expressionManager?.definitions
+  if (!Array.isArray(defs)) return -1
+  const normalized = normalizeActionToken(name)
+  if (!normalized) return -1
+
+  for (let i = 0; i < defs.length; i += 1) {
+    const item = defs[i]
+    const raw =
+      typeof item === 'string'
+        ? item
+        : String(item?.Name || item?.name || item?.File || item?.file || '').trim()
+    if (!raw) continue
+    const variants = [raw, raw.replace(/\.(exp3\.json|json)$/i, '')]
+    if (variants.some((token) => normalizeActionToken(token) === normalized)) {
+      return i
+    }
+  }
+
+  return -1
+}
+
+function resolveMotionFallback(name: string): { group: string; index?: number } | null {
+  if (!currentModel) return null
+  const defs = (currentModel as any)?.internalModel?.motionManager?.definitions || {}
+  const entries = Object.entries(defs) as Array<[string, any[]]>
+  if (entries.length === 0) return null
+
+  const normalized = normalizeActionToken(name)
+  if (!normalized) return null
+
+  for (const [groupName] of entries) {
+    const group = String(groupName || '').trim()
+    if (!group) continue
+    if (normalizeActionToken(group) === normalized) {
+      return { group }
+    }
+  }
+
+  for (const [groupName, items] of entries) {
+    const group = String(groupName || '').trim()
+    if (!group) continue
+    const list = Array.isArray(items) ? items : []
+    for (let index = 0; index < list.length; index += 1) {
+      const item = list[index]
+      const raw = String(item?.File || item?.file || item?.Name || item?.name || '').trim()
+      if (!raw) continue
+      const variants = [raw, raw.replace(/\.(motion3\.json|json|mtn)$/i, '')]
+      if (variants.some((token) => normalizeActionToken(token) === normalized)) {
+        return { group, index }
+      }
+    }
+  }
+
+  return null
 }
 
 function findBestAvailableName(candidates: string[], available: string[]): string {
@@ -532,7 +597,10 @@ function findBestAvailableName(candidates: string[], available: string[]): strin
 }
 
 async function performAction(action: Live2DAction): Promise<{ ok: boolean; resolvedName: string }> {
-  if (!currentModel) return { ok: false, resolvedName: '' }
+  if (!currentModel) {
+    logLive2D('warn', `Live2D 动作执行被忽略: 模型未就绪 type=${action.type}, input=${action.name}`)
+    return { ok: false, resolvedName: '' }
+  }
   if (action.type !== 'expression' && action.type !== 'motion') {
     return { ok: false, resolvedName: action.name }
   }
@@ -543,20 +611,40 @@ async function performAction(action: Live2DAction): Promise<{ ok: boolean; resol
   const primary = findBestAvailableName([mapped, original], available)
   const candidates = Array.from(new Set([primary, mapped, original].map((item) => item.trim()).filter(Boolean)))
 
-  const executeByName = async (name: string) => {
+  const executeByName = async (name: string): Promise<string> => {
     if (action.type === 'expression') {
-      await currentModel!.expression(name)
-      return
+      try {
+        await currentModel!.expression(name)
+        return name
+      } catch (error) {
+        const fallbackIndex = findExpressionIndexByName(name)
+        if (fallbackIndex < 0) {
+          throw new Error(`expression(name) 失败且无索引回退: ${describeError(error)}`)
+        }
+        await currentModel!.expression(fallbackIndex as any)
+        return `${name}#${fallbackIndex}`
+      }
     }
+
     const priority = action.priority === 3 ? motionPriorityForce : motionPriorityNormal
-    await currentModel!.motion(name, undefined, priority)
+    try {
+      await currentModel!.motion(name, undefined, priority)
+      return name
+    } catch (error) {
+      const fallback = resolveMotionFallback(name)
+      if (!fallback) {
+        throw new Error(`motion(name) 失败且无分组回退: ${describeError(error)}`)
+      }
+      await currentModel!.motion(fallback.group, fallback.index, priority)
+      return typeof fallback.index === 'number' ? `${fallback.group}[${fallback.index}]` : fallback.group
+    }
   }
 
   const errors: string[] = []
   for (const candidate of candidates) {
     try {
-      await executeByName(candidate)
-      return { ok: true, resolvedName: candidate }
+      const executed = await executeByName(candidate)
+      return { ok: true, resolvedName: executed }
     } catch (error) {
       errors.push(`${candidate}: ${describeError(error)}`)
     }
@@ -597,17 +685,50 @@ function isPointInsideModel(clientX: number, clientY: number): boolean {
 
 function isPointerOnInteractiveElement(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false
-  return Boolean(target.closest('.control-panel, .control-toggle, .reply-bubble, .resize-handle, .drag-bar'))
+  return Boolean(target.closest('.control-panel, .control-toggle, .reply-bubble'))
 }
 
-function updateMousePassthroughByPointer(event: MouseEvent) {
-  if (draggingWindow || resizingEdge) {
+function clampModelWithinViewport() {
+  if (!currentModel) return
+  try {
+    const bounds = currentModel.getBounds()
+    const minVisible = 36
+    let offsetX = 0
+    let offsetY = 0
+    if (bounds.x + bounds.width < minVisible) {
+      offsetX = minVisible - (bounds.x + bounds.width)
+    } else if (bounds.x > window.innerWidth - minVisible) {
+      offsetX = window.innerWidth - minVisible - bounds.x
+    }
+    if (bounds.y + bounds.height < minVisible) {
+      offsetY = minVisible - (bounds.y + bounds.height)
+    } else if (bounds.y > window.innerHeight - minVisible) {
+      offsetY = window.innerHeight - minVisible - bounds.y
+    }
+    if (offsetX !== 0 || offsetY !== 0) {
+      baseX += offsetX
+      baseY += offsetY
+      currentModel.x += offsetX
+      currentModel.y += offsetY
+    }
+  } catch {
+    // ignore invalid bounds during model init stage
+  }
+}
+
+function updateMousePassthrough(clientX: number, clientY: number, target: EventTarget | null) {
+  if (modelDragging) {
     setMousePassthrough(false)
     return
   }
-  const onInteractiveElement = isPointerOnInteractiveElement(event.target)
-  const onModel = isPointInsideModel(event.clientX, event.clientY)
+  const element = target instanceof Element ? target : document.elementFromPoint(clientX, clientY)
+  const onInteractiveElement = isPointerOnInteractiveElement(element)
+  const onModel = isPointInsideModel(clientX, clientY)
   setMousePassthrough(!(onInteractiveElement || onModel))
+}
+
+function updateMousePassthroughByPointer(event: MouseEvent) {
+  updateMousePassthrough(event.clientX, event.clientY, event.target)
 }
 
 function showReply(text: string) {
@@ -619,29 +740,48 @@ function showReply(text: string) {
 }
 
 function handleResize() {
-  if (!pixiApp || !currentModel) return
+  if (!pixiApp) return
   pixiApp.renderer.resize(window.innerWidth, window.innerHeight)
-  fitModel(currentModel, 'resize')
+  if (currentModel) {
+    if (modelTransformCustomized) {
+      clampModelWithinViewport()
+    } else {
+      fitModel(currentModel, 'resize')
+    }
+  }
   focusTargetX = window.innerWidth / 2
   focusTargetY = window.innerHeight * 0.45
   if (lastPointerX > 0 || lastPointerY > 0) {
-    updateMousePassthroughByPointer(
-      new MouseEvent('mousemove', {
-        clientX: lastPointerX,
-        clientY: lastPointerY,
-      })
-    )
+    updateMousePassthrough(lastPointerX, lastPointerY, null)
   }
 }
 
 function handleMouseMove(event: MouseEvent) {
   const rect = canvasRef.value?.getBoundingClientRect()
   if (!rect) return
+  if (modelDragging && event.buttons === 0) {
+    modelDragging = false
+  }
   lastPointerX = event.clientX
   lastPointerY = event.clientY
   trackingMouseInside = true
   focusTargetX = Math.max(rect.left, Math.min(rect.right, event.clientX))
   focusTargetY = Math.max(rect.top, Math.min(rect.bottom, event.clientY))
+  if (modelDragging && currentModel) {
+    const localX = event.clientX - rect.left
+    const localY = event.clientY - rect.top
+    const nextX = localX - modelDragOffsetX
+    const nextY = localY - modelDragOffsetY
+    if (Math.abs(nextX - baseX) + Math.abs(nextY - baseY) > 1.2) {
+      modelDragMoved = true
+    }
+    baseX = nextX
+    baseY = nextY
+    currentModel.x = nextX
+    currentModel.y = nextY
+    modelTransformCustomized = true
+    clampModelWithinViewport()
+  }
   updateMousePassthroughByPointer(event)
 }
 
@@ -649,13 +789,58 @@ function handleMouseLeave() {
   trackingMouseInside = false
   focusTargetX = window.innerWidth / 2
   focusTargetY = window.innerHeight * 0.45
+  if (modelDragging) return
   setMousePassthrough(true)
 }
 
 function handleClick(event: MouseEvent) {
+  if (modelDragMoved) {
+    modelDragMoved = false
+    return
+  }
+  if (!isPointInsideModel(event.clientX, event.clientY)) return
   window.electronAPI.trigger.invoke({ trigger: 'click_avatar' })
   if (currentModel) {
     currentModel.tap(event.clientX, event.clientY)
+  }
+}
+
+function handleMouseUp(event: MouseEvent) {
+  if (modelDragging) {
+    modelDragging = false
+  }
+  updateMousePassthrough(event.clientX, event.clientY, event.target)
+}
+
+function startModelDrag(event: MouseEvent) {
+  if (event.button !== 0) return
+  if (!currentModel || !canvasRef.value) return
+  if (!isPointInsideModel(event.clientX, event.clientY)) return
+  const rect = canvasRef.value.getBoundingClientRect()
+  const localX = event.clientX - rect.left
+  const localY = event.clientY - rect.top
+  modelDragging = true
+  modelDragMoved = false
+  modelDragOffsetX = localX - currentModel.x
+  modelDragOffsetY = localY - currentModel.y
+  setMousePassthrough(false)
+}
+
+function handleModelWheel(event: WheelEvent) {
+  if (!currentModel) return
+  if (!isPointInsideModel(event.clientX, event.clientY)) return
+  const currentScale = Number(currentModel.scale.x) || 1
+  const factor = Math.exp(-event.deltaY * 0.0015)
+  const nextScale = Math.max(0.05, Math.min(6, currentScale * factor))
+  if (!Number.isFinite(nextScale) || Math.abs(nextScale - currentScale) < 0.0005) return
+  currentModel.scale.set(nextScale)
+  modelTransformCustomized = true
+  clampModelWithinViewport()
+  setMousePassthrough(false)
+  const now = Date.now()
+  if (now - lastScaleLogAt > 320) {
+    lastScaleLogAt = now
+    logLive2D('info', `Live2D 模型缩放: scale=${nextScale.toFixed(3)}, deltaY=${event.deltaY.toFixed(1)}`)
   }
 }
 
@@ -666,96 +851,39 @@ function toggleControlPanel() {
 async function triggerExpressionManually() {
   const name = selectedExpression.value.trim()
   if (!name) return
+  const mapped = resolveMappedActionName({ type: 'expression', name }).trim()
+  const available = collectAvailableActionNames('expression')
+  logLive2D(
+    'info',
+    `Live2D 手动触发表情请求: input=${name}, mapped=${mapped || '空'}, available=${available.length}, sample=${available.slice(0, 8).join(', ') || '无'}`
+  )
   const result = await performAction({ type: 'expression', name })
   if (result.ok) {
     logLive2D('info', `Live2D 手动触发表情成功: ${name} => ${result.resolvedName}`)
   } else {
-    logLive2D('warn', `Live2D 手动触发表情失败: ${name}`)
+    logLive2D('warn', `Live2D 手动触发表情失败: ${name}, mapped=${mapped || '空'}`)
   }
 }
 
 async function triggerMotionManually() {
   const name = selectedMotion.value.trim()
   if (!name) return
+  const mapped = resolveMappedActionName({ type: 'motion', name }).trim()
+  const available = collectAvailableActionNames('motion')
+  logLive2D(
+    'info',
+    `Live2D 手动触发动作请求: input=${name}, mapped=${mapped || '空'}, available=${available.length}, sample=${available.slice(0, 8).join(', ') || '无'}`
+  )
   const result = await performAction({ type: 'motion', name, priority: 3 })
   if (result.ok) {
     logLive2D('info', `Live2D 手动触发动作成功: ${name} => ${result.resolvedName}`)
   } else {
-    logLive2D('warn', `Live2D 手动触发动作失败: ${name}`)
+    logLive2D('warn', `Live2D 手动触发动作失败: ${name}, mapped=${mapped || '空'}`)
   }
-}
-
-function stopActiveDragResize() {
-  if (draggingWindow) {
-    draggingWindow = false
-    void window.electronAPI.window.dragEnd()
-  }
-  if (resizingEdge) {
-    resizingEdge = null
-    void window.electronAPI.window.resizeEnd()
-  }
-}
-
-function bindDragResizeListeners() {
-  if (removeDragResizeListeners) {
-    removeDragResizeListeners()
-  }
-  const onMove = (event: MouseEvent) => {
-    if (event.buttons === 0 && (draggingWindow || resizingEdge)) {
-      stopActiveDragResize()
-      return
-    }
-    if (draggingWindow) {
-      void window.electronAPI.window.dragUpdate(event.screenX, event.screenY)
-    }
-    if (resizingEdge) {
-      void window.electronAPI.window.resizeUpdate(event.screenX, event.screenY)
-    }
-  }
-  const onUp = () => {
-    stopActiveDragResize()
-    window.removeEventListener('mousemove', onMove)
-    window.removeEventListener('mouseup', onUp)
-    removeDragResizeListeners = null
-  }
-  window.addEventListener('mousemove', onMove)
-  window.addEventListener('mouseup', onUp)
-  removeDragResizeListeners = () => {
-    window.removeEventListener('mousemove', onMove)
-    window.removeEventListener('mouseup', onUp)
-    removeDragResizeListeners = null
-  }
-}
-
-function startDragWindow(event: MouseEvent) {
-  if (event.button !== 0) return
-  if (resizingEdge) {
-    resizingEdge = null
-    void window.electronAPI.window.resizeEnd()
-  }
-  setMousePassthrough(false)
-  draggingWindow = true
-  void window.electronAPI.window.dragBegin(event.screenX, event.screenY)
-  bindDragResizeListeners()
-}
-
-function startResizeWindow(
-  edge: 'top' | 'right' | 'bottom' | 'left' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
-  event: MouseEvent
-) {
-  if (event.button !== 0) return
-  if (draggingWindow) {
-    draggingWindow = false
-    void window.electronAPI.window.dragEnd()
-  }
-  setMousePassthrough(false)
-  resizingEdge = edge
-  void window.electronAPI.window.resizeBegin(edge, event.screenX, event.screenY)
-  bindDragResizeListeners()
 }
 
 function handleWindowBlur() {
-  stopActiveDragResize()
+  modelDragging = false
   setMousePassthrough(true)
 }
 
@@ -801,9 +929,11 @@ onMounted(async () => {
       const speed = Math.max(0.1, behavior.idleSwaySpeed || 0.8)
       const amplitude = Math.max(0, behavior.idleSwayAmplitude || 0)
       currentModel.x = baseX + Math.sin(swayTime * speed) * amplitude
+      currentModel.y = baseY
       currentModel.rotation = baseRotation + Math.sin(swayTime * speed * 0.7) * 0.01
     } else {
       currentModel.x = baseX
+      currentModel.y = baseY
       currentModel.rotation = baseRotation
     }
 
@@ -842,10 +972,12 @@ onMounted(async () => {
 
   window.addEventListener('resize', handleResize)
   window.addEventListener('mousemove', handleMouseMove)
+  window.addEventListener('mouseup', handleMouseUp)
   window.addEventListener('mouseleave', handleMouseLeave)
   window.addEventListener('blur', handleWindowBlur)
   cleanups.push(() => window.removeEventListener('resize', handleResize))
   cleanups.push(() => window.removeEventListener('mousemove', handleMouseMove))
+  cleanups.push(() => window.removeEventListener('mouseup', handleMouseUp))
   cleanups.push(() => window.removeEventListener('mouseleave', handleMouseLeave))
   cleanups.push(() => window.removeEventListener('blur', handleWindowBlur))
 })
@@ -867,10 +999,7 @@ onBeforeUnmount(() => {
     pixiApp = null
   }
 
-  stopActiveDragResize()
-  if (removeDragResizeListeners) {
-    removeDragResizeListeners()
-  }
+  modelDragging = false
   setMousePassthrough(false)
 
   if (replyTimer) clearTimeout(replyTimer)
@@ -885,17 +1014,6 @@ onBeforeUnmount(() => {
   overflow: hidden;
   background: transparent;
   -webkit-app-region: no-drag;
-}
-
-.drag-bar {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 100%;
-  height: 34px;
-  z-index: 900;
-  -webkit-app-region: no-drag;
-  cursor: move;
 }
 
 canvas {
@@ -987,78 +1105,6 @@ canvas {
   color: #0f766e;
   border-radius: 8px;
   cursor: pointer;
-}
-
-.resize-handle {
-  position: absolute;
-  z-index: 980;
-  -webkit-app-region: no-drag;
-}
-
-.resize-handle.top,
-.resize-handle.bottom {
-  left: 10px;
-  right: 10px;
-  height: 6px;
-}
-
-.resize-handle.left,
-.resize-handle.right {
-  top: 10px;
-  bottom: 10px;
-  width: 6px;
-}
-
-.resize-handle.top {
-  top: 0;
-  cursor: ns-resize;
-}
-
-.resize-handle.right {
-  right: 0;
-  cursor: ew-resize;
-}
-
-.resize-handle.bottom {
-  bottom: 0;
-  cursor: ns-resize;
-}
-
-.resize-handle.left {
-  left: 0;
-  cursor: ew-resize;
-}
-
-.resize-handle.top-left,
-.resize-handle.top-right,
-.resize-handle.bottom-left,
-.resize-handle.bottom-right {
-  width: 10px;
-  height: 10px;
-}
-
-.resize-handle.top-left {
-  top: 0;
-  left: 0;
-  cursor: nwse-resize;
-}
-
-.resize-handle.top-right {
-  top: 0;
-  right: 0;
-  cursor: nesw-resize;
-}
-
-.resize-handle.bottom-left {
-  bottom: 0;
-  left: 0;
-  cursor: nesw-resize;
-}
-
-.resize-handle.bottom-right {
-  bottom: 0;
-  right: 0;
-  cursor: nwse-resize;
 }
 
 @keyframes fadeIn {

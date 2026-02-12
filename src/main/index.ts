@@ -5,6 +5,7 @@ import {
   ipcMain,
   dialog,
   shell,
+  screen,
   Tray,
   Menu,
   nativeImage,
@@ -310,19 +311,41 @@ class Application {
     this.chatWindow.on('resize', () => this.schedulePersistWindowSize())
   }
 
+  private syncLive2DWindowBounds(reason: string) {
+    if (!this.live2dWindow || this.live2dWindow.isDestroyed()) return
+    const bounds = screen.getPrimaryDisplay().bounds
+    this.live2dWindow.setBounds({
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+    })
+    this.live2dWindow.setMinimumSize(bounds.width, bounds.height)
+    this.live2dWindow.setMaximumSize(bounds.width, bounds.height)
+    if (reason !== 'init') {
+      this.addRuntimeLog('info', `Live2D 窗口已固定全屏: reason=${reason}, size=${bounds.width}x${bounds.height}`, 'live2d')
+    }
+  }
+
   private createLive2DWindow() {
-    const config = this.configManager.getAll()
     const icon = this.resolveIconPath()
     const preload = this.resolvePreloadPath()
+    const bounds = screen.getPrimaryDisplay().bounds
     this.live2dWindow = new BrowserWindow({
-      width: config.window.live2dWidth,
-      height: config.window.live2dHeight,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
       show: false,
       frame: false,
       transparent: true,
       backgroundColor: '#00000000',
       alwaysOnTop: true,
-      resizable: true,
+      resizable: false,
+      movable: false,
+      maximizable: false,
+      minimizable: false,
+      fullscreenable: false,
       skipTaskbar: true,
       hasShadow: false,
       autoHideMenuBar: true,
@@ -336,7 +359,12 @@ class Application {
       },
     })
 
-    this.live2dWindow.setIgnoreMouseEvents(false)
+    this.syncLive2DWindowBounds('init')
+    this.live2dWindow.setIgnoreMouseEvents(true, { forward: true })
+    const syncBounds = () => this.syncLive2DWindowBounds('display-metrics-changed')
+    screen.on('display-added', syncBounds)
+    screen.on('display-removed', syncBounds)
+    screen.on('display-metrics-changed', syncBounds)
 
     if (process.env.NODE_ENV === 'development') {
       this.live2dWindow.loadURL('http://localhost:5173/#/live2d')
@@ -360,8 +388,6 @@ class Application {
         this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
       }
     })
-
-    this.live2dWindow.on('resize', () => this.schedulePersistWindowSize())
   }
 
   private createTray() {
@@ -411,11 +437,9 @@ class Application {
     if (!this.chatWindow) return
     if (this.chatWindow.isVisible()) {
       this.chatWindow.hide()
-      this.live2dWindow?.setIgnoreMouseEvents(false)
     } else {
       this.chatWindow.show()
       this.chatWindow.focus()
-      this.live2dWindow?.setIgnoreMouseEvents(false)
     }
   }
 
@@ -425,7 +449,6 @@ class Application {
       this.chatWindow.show()
     }
     this.chatWindow.focus()
-    this.live2dWindow?.setIgnoreMouseEvents(false)
   }
 
   private toggleLive2DWindow() {
@@ -433,7 +456,9 @@ class Application {
     if (this.live2dWindow.isVisible()) {
       this.live2dWindow.hide()
     } else {
+      this.syncLive2DWindowBounds('toggle-show')
       this.live2dWindow.show()
+      this.live2dWindow.setIgnoreMouseEvents(true, { forward: true })
     }
   }
 
@@ -442,13 +467,14 @@ class Application {
     if (!this.live2dWindow.isVisible()) {
       this.live2dWindow.show()
     }
-    this.live2dWindow.focus()
-    this.live2dWindow.setIgnoreMouseEvents(false)
+    this.syncLive2DWindowBounds('show')
+    this.live2dWindow.setIgnoreMouseEvents(true, { forward: true })
   }
 
   private beginWindowDrag(sender: Electron.WebContents, x: number, y: number) {
     const win = BrowserWindow.fromWebContents(sender)
     if (!win || win.isDestroyed()) return { ok: false }
+    if (win === this.live2dWindow) return { ok: false, reason: 'live2d-fixed-fullscreen' }
     this.mousePassthroughSessions.set(sender.id, false)
     win.setIgnoreMouseEvents(false)
     const [winX, winY] = win.getPosition()
@@ -499,6 +525,7 @@ class Application {
   ) {
     const win = BrowserWindow.fromWebContents(sender)
     if (!win || win.isDestroyed()) return { ok: false }
+    if (win === this.live2dWindow) return { ok: false, reason: 'live2d-fixed-fullscreen' }
     this.mousePassthroughSessions.set(sender.id, false)
     win.setIgnoreMouseEvents(false)
     const bounds = win.getBounds()
@@ -582,11 +609,6 @@ class Application {
         const [chatWidth, chatHeight] = this.chatWindow.getSize()
         next.chatWidth = chatWidth
         next.chatHeight = chatHeight
-      }
-      if (this.live2dWindow && !this.live2dWindow.isDestroyed()) {
-        const [live2dWidth, live2dHeight] = this.live2dWindow.getSize()
-        next.live2dWidth = live2dWidth
-        next.live2dHeight = live2dHeight
       }
       this.configManager.set('window', next)
     }, 300)
@@ -1029,7 +1051,7 @@ class Application {
       if (key === 'window') {
         const windowConfig = this.configManager.getAll().window
         this.chatWindow?.setSize(windowConfig.chatWidth, windowConfig.chatHeight)
-        this.live2dWindow?.setSize(windowConfig.live2dWidth, windowConfig.live2dHeight)
+        this.syncLive2DWindowBounds('config-window')
       }
       if (hotkeyResult) {
         return hotkeyResult
@@ -1103,9 +1125,6 @@ class Application {
       if (window) {
         if (window === this.chatWindow || window === this.live2dWindow) {
           window.hide()
-          if (window === this.chatWindow) {
-            this.live2dWindow?.setIgnoreMouseEvents(false)
-          }
           return
         }
         window.minimize()
@@ -1118,7 +1137,6 @@ class Application {
           window.hide() // 只有主窗口是隐藏
         } else if (window === this.chatWindow) {
           window.hide() // 聊天窗口也隐藏
-          this.live2dWindow?.setIgnoreMouseEvents(false) // 恢复Live2D点击穿透
         } else {
           window.close() // 其他窗口关闭
         }

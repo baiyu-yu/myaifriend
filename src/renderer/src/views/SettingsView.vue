@@ -171,14 +171,11 @@
           <el-form-item label="眼部鼠标追踪">
             <el-switch v-model="configStore.config.live2dBehavior.enableEyeTracking" />
           </el-form-item>
-          <el-form-item label="窗口宽度">
-            <el-input-number v-model="configStore.config.window.live2dWidth" :min="120" :max="1200" />
-          </el-form-item>
-          <el-form-item label="窗口高度">
-            <el-input-number v-model="configStore.config.window.live2dHeight" :min="120" :max="1200" />
+          <el-form-item label="窗口模式">
+            <el-text type="info">Live2D 窗口已固定为全屏透明覆盖层，非模型/对话框/功能按钮区域自动点击穿透。</el-text>
           </el-form-item>
           <el-form-item>
-            <el-button type="primary" @click="saveLive2DConfig">保存模型与窗口设置</el-button>
+            <el-button type="primary" @click="saveLive2DConfig">保存模型与行为设置</el-button>
           </el-form-item>
         </el-form>
 
@@ -715,7 +712,6 @@ async function saveLive2DConfig() {
   try {
     await configStore.setConfig('live2dModelPath', configStore.config.live2dModelPath)
     await configStore.setConfig('live2dBehavior', { ...configStore.config.live2dBehavior })
-    await configStore.setConfig('window', { ...configStore.config.window })
     await configStore.loadConfig()
     selectedSavedModelPath.value = configStore.config.live2dModelPath || ''
     syncActionMapRowsFromConfig()
