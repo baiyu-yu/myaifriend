@@ -23,9 +23,18 @@ function mergeConfig<T>(base: T, incoming: unknown): T {
     return base
   }
 
-  const merged: Record<string, unknown> = { ...base }
-  for (const key of Object.keys(base)) {
-    merged[key] = mergeConfig((base as Record<string, unknown>)[key], incoming[key])
+  const baseObj = base as Record<string, unknown>
+  const incomingObj = incoming as Record<string, unknown>
+  const merged: Record<string, unknown> = {}
+  const keys = new Set<string>([...Object.keys(baseObj), ...Object.keys(incomingObj)])
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(baseObj, key)) {
+      merged[key] = mergeConfig(baseObj[key], incomingObj[key])
+      continue
+    }
+    if (incomingObj[key] !== undefined) {
+      merged[key] = incomingObj[key]
+    }
   }
   return merged as T
 }

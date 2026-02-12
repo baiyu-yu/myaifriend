@@ -69,6 +69,14 @@ class Application {
       .replace(/\boption\b/gi, 'Alt')
   }
 
+  private describeError(error: unknown): string {
+    if (error instanceof Error) {
+      const stackTop = error.stack?.split('\n').slice(0, 3).join(' > ')
+      return stackTop ? `${error.message} | ${stackTop}` : error.message
+    }
+    return String(error)
+  }
+
   private toIPCData<T>(value: T): T {
     try {
       return structuredClone(value)
@@ -498,7 +506,17 @@ class Application {
 
   private async findLive2DModelInFolder(folderPath: string, depth = 0): Promise<string | null> {
     if (depth > 3) return null
-    const entries = await fs.promises.readdir(folderPath, { withFileTypes: true })
+    let entries: fs.Dirent[]
+    try {
+      entries = await fs.promises.readdir(folderPath, { withFileTypes: true })
+    } catch (error) {
+      this.addRuntimeLog(
+        'warn',
+        `Live2D 目录扫描失败: ${folderPath} | ${this.describeError(error)}`,
+        'live2d'
+      )
+      return null
+    }
     const files = entries.filter((e) => e.isFile()).map((e) => path.join(folderPath, e.name))
     const model3 = files.find((f) => path.basename(f).toLowerCase().endsWith('.model3.json'))
     if (model3) return model3
@@ -533,8 +551,12 @@ class Application {
           return filePath
         }
       }
-    } catch {
-      // ignore parse errors here, caller will fallback
+    } catch (error) {
+      this.addRuntimeLog(
+        'warn',
+        `Live2D 伴随配置读取失败: ${metaPath} | ${this.describeError(error)}`,
+        'live2d'
+      )
     }
     return null
   }
@@ -555,11 +577,39 @@ class Application {
       }
       const companion = await this.resolveCompanionModelPath(normalized)
       if (companion) return companion
+      let nearbyJson = '无'
+      try {
+        nearbyJson = (await fs.promises.readdir(path.dirname(normalized)))
+          .filter((name) => /\.json$/i.test(name))
+          .slice(0, 6)
+          .join(', ') || '无'
+      } catch {
+        // ignore list failure
+      }
+      this.addRuntimeLog(
+        'warn',
+        `Live2D 配置未定位到模型入口: ${normalized} | 同目录 JSON: ${nearbyJson}`,
+        'live2d'
+      )
       throw new Error('无法从所选配置文件定位到 .model3.json/.model.json 模型入口')
     }
     if (stat.isDirectory()) {
       const modelPath = await this.findLive2DModelInFolder(normalized)
       if (!modelPath) {
+        let jsonSample = '无'
+        try {
+          jsonSample = (await fs.promises.readdir(normalized))
+            .filter((name) => /\.json$/i.test(name))
+            .slice(0, 8)
+            .join(', ') || '无'
+        } catch {
+          // ignore list failure
+        }
+        this.addRuntimeLog(
+          'warn',
+          `Live2D 文件夹未找到模型入口: ${normalized} | JSON示例: ${jsonSample}`,
+          'live2d'
+        )
         throw new Error('所选文件夹中未找到 Live2D 模型入口（.model3.json/.model.json）')
       }
       return modelPath
@@ -650,8 +700,11 @@ class Application {
             }
           }
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          this.addRuntimeLog('warn', `Live2D 伴随配置解析失败: ${companionPath} | ${message}`, 'live2d')
+          this.addRuntimeLog(
+            'warn',
+            `Live2D 伴随配置解析失败: ${companionPath} | ${this.describeError(error)}`,
+            'live2d'
+          )
         }
       }
 
@@ -661,7 +714,17 @@ class Application {
       const collectFiles = async (folder: string, matcher: RegExp, depth = 0): Promise<string[]> => {
         if (depth > 3) return []
         const result: string[] = []
-        const entries = await fs.promises.readdir(folder, { withFileTypes: true })
+        let entries: fs.Dirent[]
+        try {
+          entries = await fs.promises.readdir(folder, { withFileTypes: true })
+        } catch (error) {
+          this.addRuntimeLog(
+            'warn',
+            `Live2D 动作文件扫描失败: ${folder} | ${this.describeError(error)}`,
+            'live2d'
+          )
+          return result
+        }
         for (const entry of entries) {
           const fullPath = path.join(folder, entry.name)
           if (entry.isDirectory()) {
@@ -704,11 +767,21 @@ class Application {
         `Live2D 映射解析详情: model(exp:${fromModelExpression},motion:${fromModelMotion}) companion(exp:${fromCompanionExpression},motion:${fromCompanionMotion}) scan(exp:${fromScanExpression},motion:${fromScanMotion}) | exp示例: ${expressionSample} | motion示例: ${motionSample}`,
         'live2d'
       )
+      if (Object.keys(expression).length === 0 && Object.keys(motion).length === 0) {
+        this.addRuntimeLog(
+          'warn',
+          `Live2D 映射读取结果为空: ${modelPath}。请检查模型目录中的 Expressions/Motions、*.exp3.json、*.motion3.json 是否存在且可读取。`,
+          'live2d'
+        )
+      }
 
       return { expression, motion }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      this.addRuntimeLog('error', `Live2D 映射解析失败: ${modelPath} | ${message}`, 'live2d')
+      this.addRuntimeLog(
+        'error',
+        `Live2D 映射解析失败: ${modelPath} | ${this.describeError(error)}`,
+        'live2d'
+      )
       return { expression: {}, motion: {} }
     }
   }
@@ -735,8 +808,11 @@ class Application {
         try {
           nextValue = await this.resolveLive2DModelPath(value)
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          this.addRuntimeLog('error', `Live2D 模型路径解析失败: ${value} | ${message}`, 'live2d')
+          this.addRuntimeLog(
+            'error',
+            `Live2D 模型路径解析失败: ${value} | ${this.describeError(error)}`,
+            'live2d'
+          )
           throw error
         }
         if (nextValue) {
@@ -753,7 +829,7 @@ class Application {
           this.upsertLive2DModelRecord(modelPath)
           this.addRuntimeLog(
             'info',
-            `Live2D 映射已自动读取并切换: ${modelPath} | expression ${Object.keys(parsed.expression).length} 项, motion ${Object.keys(parsed.motion).length} 项`,
+            `Live2D 映射已自动读取并切换: ${modelPath} | 自动读取 expression ${Object.keys(parsed.expression).length} 项, motion ${Object.keys(parsed.motion).length} 项 | 当前生效 expression ${Object.keys(merged.expression).length} 项, motion ${Object.keys(merged.motion).length} 项`,
             'live2d'
           )
         }

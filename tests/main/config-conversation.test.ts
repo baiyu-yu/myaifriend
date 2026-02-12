@@ -25,6 +25,40 @@ test('config manager persists and loads agent chain settings', () => {
   assert.equal(reloaded.agentChain.enableMemory, false)
 })
 
+test('config manager keeps dynamic record keys for live2d/tool toggles', () => {
+  resetTestStore()
+  const manager = new ConfigManager()
+  const modelKey = 'D:\\demo\\model\\hero.model3.json'
+  manager.set('live2dActionMap', {
+    expression: {
+      happy: 'exp_happy',
+    },
+    motion: {
+      wave: 'motion_wave',
+    },
+  })
+  manager.set('live2dModelActionMaps', {
+    [modelKey]: {
+      expression: {
+        smile: 'smile',
+      },
+      motion: {
+        Idle: 'Idle',
+      },
+    },
+  })
+  manager.set('toolToggles', {
+    web_search: false,
+  })
+
+  const reloaded = new ConfigManager().getAll()
+  assert.equal(reloaded.live2dActionMap.expression.happy, 'exp_happy')
+  assert.equal(reloaded.live2dActionMap.motion.wave, 'motion_wave')
+  assert.equal(reloaded.live2dModelActionMaps[modelKey]?.expression?.smile, 'smile')
+  assert.equal(reloaded.live2dModelActionMaps[modelKey]?.motion?.Idle, 'Idle')
+  assert.equal(reloaded.toolToggles.web_search, false)
+})
+
 test('ipc channels contain core chat/config/memory routes', () => {
   assert.equal(IPC_CHANNELS.CONFIG_GET_ALL, 'config:getAll')
   assert.equal(IPC_CHANNELS.CHAT_SEND, 'chat:send')

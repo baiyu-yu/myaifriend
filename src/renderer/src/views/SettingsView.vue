@@ -149,10 +149,8 @@
                   :value="item.path"
                 />
               </el-select>
-              <el-button @click="switchSavedLive2DModel(selectedSavedModelPath)" :disabled="!selectedSavedModelPath">
-                热切换
-              </el-button>
             </div>
+            <el-text type="info">选择后会自动切换模型，并加载该模型对应的映射表。</el-text>
           </el-form-item>
           <el-form-item label="模型文件">
             <el-input v-model="configStore.config.live2dModelPath" placeholder="选择 .model3.json 文件" readonly>
@@ -419,8 +417,12 @@
         </el-form>
       </el-tab-pane>
     </el-tabs>
-    <el-button text class="side-collapse-btn" @click="toggleTabsCollapsed">
-      {{ tabsCollapsed ? '展开菜单' : '收起菜单' }}
+    <el-button class="side-collapse-btn" @click="toggleTabsCollapsed">
+      <el-icon>
+        <ArrowRightBold v-if="tabsCollapsed" />
+        <ArrowLeftBold v-else />
+      </el-icon>
+      <span class="side-collapse-text">{{ tabsCollapsed ? '展开菜单' : '收起菜单' }}</span>
     </el-button>
 
     <el-dialog v-model="showApiDialog" :title="editingApi ? '编辑 API' : '新增 API'" width="520px">
@@ -469,7 +471,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { v4 as uuidv4 } from 'uuid'
 import { useConfigStore } from '../stores/config'
-import { Back } from '@element-plus/icons-vue'
+import { ArrowLeftBold, ArrowRightBold, Back } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import type {
   ApiConfig,
@@ -979,6 +981,21 @@ watch(activeTab, (tab) => {
   stopLogAutoRefresh()
 })
 
+watch(
+  () => configStore.config.live2dActionMap,
+  () => {
+    syncActionMapRowsFromConfig()
+  },
+  { deep: true }
+)
+
+watch(
+  () => configStore.config.live2dModelPath,
+  (modelPath) => {
+    selectedSavedModelPath.value = modelPath || ''
+  }
+)
+
 onBeforeUnmount(() => {
   stopLogAutoRefresh()
 })
@@ -1102,16 +1119,40 @@ onBeforeUnmount(() => {
   position: absolute;
   left: 28px;
   bottom: 18px;
-  width: 184px;
-  text-align: left;
+  height: 34px;
+  min-width: 144px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 118, 110, 0.3);
+  background: linear-gradient(135deg, rgba(233, 248, 245, 0.95), rgba(215, 242, 237, 0.95));
   color: #0f766e;
+  box-shadow: 0 8px 18px rgba(15, 118, 110, 0.14);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   z-index: 30;
 }
 
 .tabs.collapsed + .side-collapse-btn {
-  left: 24px;
-  width: 44px;
-  text-align: center;
+  left: 22px;
+  min-width: 40px;
+  width: 40px;
+  padding: 0;
+}
+
+.tabs.collapsed + .side-collapse-btn .side-collapse-text {
+  display: none;
+}
+
+.side-collapse-btn:hover {
+  border-color: rgba(15, 118, 110, 0.5);
+  filter: brightness(1.03);
+}
+
+.side-collapse-btn :deep(.el-icon) {
+  margin-right: 0;
+  font-size: 13px;
 }
 
 .card-header {
