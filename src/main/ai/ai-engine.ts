@@ -490,7 +490,7 @@ export class AIEngine {
 
     let response = await this.requestChatCompletion(
       apiConfig,
-      this.buildRequestBody(modelName, taskMessages, shouldUseTools ? tools : [])
+      this.buildRequestBody(modelName, taskMessages, shouldUseTools ? tools : [], shouldUseTools)
     )
     let toolCallMessage = response.choices?.[0]?.message
     const firstFinishReason = response.choices?.[0]?.finish_reason || ''
@@ -522,7 +522,7 @@ export class AIEngine {
           timestamp: Date.now(),
         },
       ]
-      response = await this.requestChatCompletion(apiConfig, this.buildRequestBody(modelName, retryMessages, tools))
+      response = await this.requestChatCompletion(apiConfig, this.buildRequestBody(modelName, retryMessages, tools, true))
       toolCallMessage = response.choices?.[0]?.message
       this.logWorkflow(
         'task_tool_calls_retry',
@@ -1006,7 +1006,12 @@ export class AIEngine {
     return next
   }
 
-  private buildRequestBody(modelName: string, messages: ChatMessage[], tools?: ToolDefinition[]): ChatCompletionRequest {
+  private buildRequestBody(
+    modelName: string,
+    messages: ChatMessage[],
+    tools?: ToolDefinition[],
+    forceToolChoice = false
+  ): ChatCompletionRequest {
     const baseBody: ChatCompletionRequest = {
       model: modelName,
       messages: messages.map((message) => ({
@@ -1037,6 +1042,7 @@ export class AIEngine {
                 },
               },
             })),
+            ...(forceToolChoice ? { tool_choice: 'required' } : {}),
           }
         : {}),
     }
@@ -1047,8 +1053,19 @@ export class AIEngine {
   private async requestChatCompletion(apiConfig: ApiConfig, requestBody: ChatCompletionRequest): Promise<ChatCompletionResponse> {
     const controller = new AbortController()
     this.abortControllers.add(controller)
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const url = `${apiConfig.baseUrl}/chat/completions`
+    const safeRequestLog = {
+      request_id: requestId,
+      url,
+      model: requestBody.model,
+      has_tools: Array.isArray(requestBody.tools) && requestBody.tools.length > 0,
+      tool_choice: (requestBody as Record<string, unknown>).tool_choice || '',
+      body: requestBody,
+    }
+    console.info('[chat-workflow][model_request]', JSON.stringify(safeRequestLog, null, 2))
     try {
-      const response = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1057,10 +1074,52 @@ export class AIEngine {
         body: JSON.stringify(requestBody),
         signal: controller.signal,
       })
-      if (!response.ok) {
-        throw new Error(`API request failed (${response.status}): ${await response.text()}`)
+      let parsed: unknown = null
+      let rawText = ''
+      if (typeof (response as any).text === 'function') {
+        rawText = await response.text()
+        try {
+          parsed = rawText ? JSON.parse(rawText) : null
+        } catch {
+          parsed = null
+        }
+      } else if (typeof (response as any).json === 'function') {
+        parsed = await response.json()
+        rawText = JSON.stringify(parsed)
       }
-      return (await response.json()) as ChatCompletionResponse
+      console.info(
+        '[chat-workflow][model_response]',
+        JSON.stringify(
+          {
+            request_id: requestId,
+            status: response.status,
+            ok: response.ok,
+            body_text: rawText,
+          },
+          null,
+          2
+        )
+      )
+      if (!response.ok) {
+        throw new Error(`API request failed (${response.status}): ${rawText}`)
+      }
+      if (parsed === null) {
+        throw new Error(`API response is not valid JSON: ${rawText}`)
+      }
+      const casted = parsed as ChatCompletionResponse
+      if (!Array.isArray(casted?.choices)) {
+        this.logWorkflow(
+          'model_response_unexpected',
+          {
+            request_id: requestId,
+            model: String(requestBody.model || ''),
+            response_keys: isPlainObject(parsed) ? Object.keys(parsed).join(',') : typeof parsed,
+            response_preview: truncate(rawText, 1000),
+          },
+          'warn'
+        )
+      }
+      return casted
     } finally {
       this.abortControllers.delete(controller)
     }

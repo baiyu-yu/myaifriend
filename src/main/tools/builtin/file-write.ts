@@ -130,6 +130,8 @@ export class FileWriteTool implements ITool {
     const selectedWatchFolder = String(args.watch_folder || '').trim()
     let baseFolder = ''
     let effectivePath = rawPath
+    const looksRootRelativePath =
+      /^[\\/]/.test(rawPath) && !/^[a-zA-Z]:[\\/]/.test(rawPath) && !rawPath.startsWith('\\\\')
 
     if (selectedWatchFolder) {
       const picked = this.pickWatchFolderFromInput(watchFolders, selectedWatchFolder)
@@ -139,7 +141,9 @@ export class FileWriteTool implements ITool {
       baseFolder = picked?.watchFolder || ''
     }
 
-    if (path.isAbsolute(rawPath)) {
+    if (looksRootRelativePath) {
+      effectivePath = rawPath.replace(/^[\\/]+/, '')
+    } else if (path.isAbsolute(rawPath)) {
       const resolvedPath = path.resolve(rawPath)
       if (baseFolder) {
         if (!this.isPathInside(baseFolder, resolvedPath)) {
@@ -199,6 +203,18 @@ export class FileWriteTool implements ITool {
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
     const resolved = this.resolveTargetPath(args)
     if (!resolved.ok) {
+      console.warn(
+        '[tool:file_write][resolve_failed]',
+        JSON.stringify(
+          {
+            input_path: String(args.path || ''),
+            watch_folder: String(args.watch_folder || ''),
+            reason: resolved.reason,
+          },
+          null,
+          2
+        )
+      )
       return {
         toolCallId: '',
         content: resolved.reason,
@@ -209,6 +225,20 @@ export class FileWriteTool implements ITool {
     const filePath = resolved.path
     const content = String(args.content ?? '')
     const ext = path.extname(filePath).toLowerCase()
+    console.info(
+      '[tool:file_write][resolved]',
+      JSON.stringify(
+        {
+          input_path: String(args.path || ''),
+          watch_folder: String(args.watch_folder || ''),
+          resolved_path: filePath,
+          resolved_watch_folder: resolved.watchFolder,
+          extension: ext,
+        },
+        null,
+        2
+      )
+    )
 
     try {
       await fs.mkdir(path.dirname(filePath), { recursive: true })
@@ -242,11 +272,35 @@ export class FileWriteTool implements ITool {
       }
 
       const relativeToWatchFolder = path.relative(resolved.watchFolder, filePath)
+      console.info(
+        '[tool:file_write][success]',
+        JSON.stringify(
+          {
+            file_path: filePath,
+            watch_folder: resolved.watchFolder,
+            relative_path: relativeToWatchFolder,
+          },
+          null,
+          2
+        )
+      )
       return {
         toolCallId: '',
         content: `Write success: ${filePath} (watch_folder=${resolved.watchFolder}, relative=${relativeToWatchFolder})`,
       }
     } catch (error) {
+      console.error(
+        '[tool:file_write][error]',
+        JSON.stringify(
+          {
+            file_path: filePath,
+            watch_folder: resolved.watchFolder,
+            message: error instanceof Error ? error.message : String(error),
+          },
+          null,
+          2
+        )
+      )
       return {
         toolCallId: '',
         content: `Write failed: ${error instanceof Error ? error.message : String(error)}`,

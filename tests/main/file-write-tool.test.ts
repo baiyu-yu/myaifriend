@@ -58,3 +58,17 @@ test('file_write rejects path escaping watch folder', async () => {
   await fs.rm(root, { recursive: true, force: true })
 })
 
+test('file_write treats root-relative path as watch-folder-relative path on Windows style requests', async () => {
+  const { root, folderA } = await createWatchFolders()
+  const tool = new FileWriteTool(() => ({ watchFolders: [folderA] } as any))
+
+  const result = await tool.execute({ path: '/live2d/output.html', content: '<h1>ok</h1>' })
+  assert.equal(result.isError, undefined)
+
+  const writtenPath = path.join(folderA, 'live2d', 'output.html')
+  const content = await fs.readFile(writtenPath, 'utf-8')
+  assert.equal(content, '<h1>ok</h1>')
+
+  await fs.rm(root, { recursive: true, force: true })
+})
+
