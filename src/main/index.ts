@@ -39,6 +39,8 @@ class Application {
   private isQuitting = false
   private runtimeLogs: AppLogEntry[] = []
   private storageMetaPath = ''
+  private lastTriggerLog = ''
+  private lastTriggerLogAt = 0
   private dragSessions = new Map<number, { win: BrowserWindow; startX: number; startY: number; winX: number; winY: number }>()
   private mousePassthroughSessions = new Map<number, boolean>()
   private resizeSessions = new Map<
@@ -101,7 +103,14 @@ class Application {
   }
 
   private dispatchTrigger(ctx: InvokeContext, source = 'trigger') {
-    this.addRuntimeLog('info', `AI 触发请求: ${this.summarizeInvokeContext(ctx)}`, source)
+    const summary = this.summarizeInvokeContext(ctx)
+    const now = Date.now()
+    const dedupKey = `${source}|${summary}`
+    if (this.lastTriggerLog !== dedupKey || now - this.lastTriggerLogAt > 1500) {
+      this.addRuntimeLog('info', `AI 触发: ${summary}`, source)
+      this.lastTriggerLog = dedupKey
+      this.lastTriggerLogAt = now
+    }
     this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
     this.live2dWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
   }
@@ -1344,7 +1353,6 @@ class Application {
       this.addRuntimeLog('info', `开始监听目录: ${folder}`, 'watcher')
       this.fileWatcher.watch(folder, (eventType, filePath) => {
         const data = { type: eventType, path: filePath }
-        this.addRuntimeLog('info', `文件变动事件: ${eventType} | ${filePath}`, 'watcher')
         this.chatWindow?.webContents.send(IPC_CHANNELS.FILE_WATCH_EVENT, data)
         const ctx: InvokeContext = {
           trigger: 'file_change',

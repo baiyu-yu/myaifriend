@@ -155,7 +155,6 @@ export const useChatStore = defineStore('chat', () => {
     const titleCandidate = firstUserMsg ? firstUserMsg.content.slice(0, 20) : undefined
 
     try {
-      await addChatLog('info', `发送消息: ${trimmed.slice(0, 80)}`)
       const char = configStore.activeCharacter
       const apiMessages: ChatMessage[] = []
 
@@ -226,7 +225,6 @@ export const useChatStore = defineStore('chat', () => {
           messages.value.push(assistantMsg)
         }
       }
-      await addChatLog('info', 'AI 回复完成')
     } catch (error) {
       await addChatLog('error', `发送或触发失败: ${error instanceof Error ? error.message : String(error)}`)
       messages.value.push({
@@ -244,7 +242,7 @@ export const useChatStore = defineStore('chat', () => {
   async function handleTrigger(context: InvokeContext) {
     const config = configStore.config
     let prompt = config.triggerPrompts[context.trigger] || ''
-    await addChatLog('info', `收到触发: ${context.trigger}`)
+    await addChatLog('info', `触发对话: ${context.trigger}`)
 
     if (context.fileChangeInfo) {
       prompt = prompt.replace(
@@ -254,7 +252,6 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     if (prompt) {
-      await addChatLog('info', `触发提示词已生成: ${prompt.slice(0, 120)}`)
       await sendMessage(prompt, context)
       // If triggered by non-dialog means and Live2D has a model, show reply below avatar
       if (context.trigger !== 'text_input' && config.live2dModelPath) {

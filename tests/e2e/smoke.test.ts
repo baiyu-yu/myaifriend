@@ -100,7 +100,11 @@ test('minimum e2e smoke: startup, send, save config, exit', async () => {
   assert.ok(assistantMessages.length >= 1)
   assert.equal(assistantMessages[assistantMessages.length - 1]?.inference?.model, 'smoke-model')
 
-  await configStore.setConfig('hotkeys', { toggleChat: 'Alt+Space', toggleLive2D: 'Alt+Shift+L' })
+  await configStore.setConfig('hotkeys', {
+    toggleChat: 'Alt+Space',
+    toggleLive2D: 'Alt+Shift+L',
+    toggleLive2DControls: 'Alt+Shift+H',
+  })
   assert.equal(configStore.config.hotkeys.toggleLive2D, 'Alt+Shift+L')
 
   await (globalThis as any).window.electronAPI.window.close()

@@ -6,7 +6,7 @@ import { MemoryManager } from './memory-manager'
 
 interface ChatCompletionMessage {
   role: string
-  content: string | null
+  content: string | null | Array<Record<string, unknown>>
   tool_calls?: Array<{
     id: string
     type: 'function'
@@ -45,32 +45,56 @@ type PreparedContext = {
   messages: ChatMessage[]
 }
 
-interface WorkChainStep {
-  taskType: TaskType
-  instruction: string
-  intent?: string
-  useTools?: boolean
+type WorkerModelType = 'rp' | 'coder' | 'tool'
+
+interface WorkflowTask {
+  task_id: string
+  model_type: WorkerModelType
+  input_prompt: string
+  dependencies: string[]
+  use_tools: boolean
 }
 
-interface WorkChainPlan {
-  steps: WorkChainStep[]
-  finalInstruction: string
+interface WorkflowPlan {
+  workflow_id: string
+  tasks: WorkflowTask[]
+  final_intent: string
 }
 
-type StepExecutionResult = {
-  taskType: TaskType
+type TaskExecutionResult = {
+  task_id: string
+  model_type: WorkerModelType
+  routeTaskType: TaskType
   modelName: string
-  instruction: string
-  content: string
+  input_prompt: string
+  dependencies: string[]
+  output: string
   toolOutputs: Array<{ name: string; content: string; isError?: boolean }>
 }
 
 type ToolExecutor = (name: string, args: Record<string, unknown>) => Promise<ToolResult>
 type WorkflowLogEmitter = (level: 'info' | 'warn' | 'error', message: string, source?: string) => void
 
+const PREMIER_WORKFLOW_PROMPT = `You are the orchestrator model for a dependency-based workflow system.
+You must decompose the user request into executable tasks with explicit dependencies.
+
+Return ONLY JSON:
+{
+  "workflow_id": "wf_xxx",
+  "tasks": [
+    {
+      "task_id": "task_a",
+      "model_type": "rp|coder|tool",
+      "input_prompt": "instruction for this worker",
+      "dependencies": ["task_x"],
+      "use_tools": true
+    }
+  ],
+  "final_intent": "how to compose final user-facing answer"
+}`
+
 export function estimateTokens(messages: ChatMessage[]): number {
-  const chars = messages.reduce((sum, m) => sum + m.content.length, 0)
-  return Math.ceil(chars / 4)
+  return Math.ceil(messages.reduce((sum, item) => sum + item.content.length, 0) / 4)
 }
 
 function getLastUserMessage(messages: ChatMessage[]): ChatMessage | undefined {
@@ -85,7 +109,7 @@ export function shouldCompressContext(messages: ChatMessage[], thresholdTokens: 
 }
 
 function nonSystemTurnCount(messages: ChatMessage[]): number {
-  return messages.filter((m) => m.role !== 'system').length
+  return messages.filter((message) => message.role !== 'system').length
 }
 
 export function injectMemorySystemPrompt(messages: ChatMessage[], memories: Array<{ text: string }>): ChatMessage[] {
@@ -95,7 +119,7 @@ export function injectMemorySystemPrompt(messages: ChatMessage[], memories: Arra
     {
       id: `memory-${Date.now()}`,
       role: 'system',
-      content: `以下是与用户相关的长期记忆，请在回答时优先遵循：\n${memoryPrompt}`,
+      content: `以下是与用户相关的长期记忆：\n${memoryPrompt}`,
       timestamp: Date.now(),
     },
     ...messages,
@@ -103,59 +127,47 @@ export function injectMemorySystemPrompt(messages: ChatMessage[], memories: Arra
 }
 
 function pickMemoryCandidates(text: string): string[] {
-  const lines = text.split(/[\n。！？!?]/).map((line) => line.trim())
-  return lines.filter((line) =>
-    /(记住|我喜欢|我不喜欢|我习惯|我是|我叫|我的偏好|请记下|偏好)/.test(line)
-  )
+  return text
+    .split(/[\n。！？?!]/)
+    .map((line) => line.trim())
+    .filter((line) => /(remember|prefer|dont like|my name is|I am|我喜欢|我不喜欢|记住|偏好|我叫|我是)/i.test(line))
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-const PREMIER_DISPATCH_PROMPT = `你是任务编排器（总理模型），负责把一次请求拆分成可执行工作流。
-
-你会收到：
-1) 用户最新输入
-2) 最近上下文摘要
-3) 触发原因
-4) 可用工具列表
-5) 记忆摘要
-6) 可操作文件清单
-
-可用任务类型：
-- roleplay: 角色扮演对话
-- context_compression: 上下文压缩
-- memory_fragmentation: 记忆碎片化/知识归并
-- vision: 图像理解
-- code_generation: 代码生成与改写
-- premier: 总理模型直接处理
-
-请仅返回 JSON，结构如下：
-{
-  "steps": [
-    {
-      "taskType": "roleplay|context_compression|memory_fragmentation|vision|code_generation|premier",
-      "instruction": "给该步骤模型的具体执行指令，必须可直接执行",
-      "intent": "该步骤要达成的目标",
-      "useTools": true
-    }
-  ],
-  "finalInstruction": "最终回复阶段的风格与约束"
+function normalizeWorkerModelType(input: unknown): WorkerModelType | null {
+  const value = String(input || '')
+    .trim()
+    .toLowerCase()
+  if (value === 'rp' || value === 'roleplay') return 'rp'
+  if (value === 'coder' || value === 'code' || value === 'code_generation') return 'coder'
+  if (value === 'tool' || value === 'tools' || value === 'vision' || value === 'premier') return 'tool'
+  return null
 }
 
-规则：
-1) steps 按执行顺序排列；
-2) 若无需拆分，可仅返回一步 premier；
-3) 除确有必要，不要生成过多步骤（建议 1~3 步）；
-4) instruction 中不得直接伪造工具结果，工具结果必须由工具执行产生。`
+function toBool(value: unknown, fallback = false): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['true', '1', 'yes', 'y'].includes(normalized)) return true
+    if (['false', '0', 'no', 'n'].includes(normalized)) return false
+  }
+  return fallback
+}
+
+function truncate(text: string, maxLen: number): string {
+  return text.length <= maxLen ? text : `${text.slice(0, maxLen)}...`
+}
 
 export class AIEngine {
   private configManager: ConfigManager
   private memoryManager: MemoryManager
-  private abortController: AbortController | null = null
   private toolExecutor?: ToolExecutor
   private workflowLogger?: WorkflowLogEmitter
+  private abortControllers: Set<AbortController> = new Set()
 
   constructor(configManager: ConfigManager, toolExecutor?: ToolExecutor, workflowLogger?: WorkflowLogEmitter) {
     this.configManager = configManager
@@ -174,50 +186,30 @@ export class AIEngine {
   ): Promise<ChatCompletionResponse> {
     const prepared = await this.prepareContext(messages, taskType)
     const safeTools = Array.isArray(tools) ? tools : []
-    this.logWorkflow(
-      '请求上下文',
-      [
-        `taskType=${taskType}`,
-        `invokeContext=${invokeContext ? JSON.stringify(invokeContext) : 'text_input'}`,
-        `tools=\n${this.serializeTools(safeTools) || 'none'}`,
-        `原始消息:\n${this.serializeMessages(messages) || 'none'}`,
-        `预处理后消息:\n${this.serializeMessages(prepared.messages) || 'none'}`,
-      ].join('\n\n')
-    )
-    const plan = await this.dispatchViaPremier(prepared.messages, safeTools, invokeContext)
-    const stepResults = await this.executeWorkChain(plan.steps, prepared.messages, apiConfigId, model, safeTools)
-    const finalResponse = await this.buildFinalResponse(
-      plan,
-      prepared.messages,
-      stepResults,
-      apiConfigId,
-      model
-    )
 
-    const assistantContent = finalResponse.choices?.[0]?.message?.content || ''
-    this.rememberIfNeeded(prepared.messages, assistantContent)
+    this.logWorkflow('chat_start', {
+      trigger: invokeContext?.trigger || 'text_input',
+      incoming_messages: messages.length,
+      prepared_messages: prepared.messages.length,
+      tool_count: safeTools.length,
+    })
+
+    const plan = await this.dispatchViaPremier(prepared.messages, safeTools, invokeContext)
+    const taskResults = await this.executeWorkflowPlan(plan, prepared.messages, apiConfigId, model, safeTools)
+    const finalResponse = await this.buildFinalResponse(plan, prepared.messages, taskResults, apiConfigId, model)
+
+    const assistantContent = finalResponse.choices?.[0]?.message?.content
+    this.rememberIfNeeded(prepared.messages, typeof assistantContent === 'string' ? assistantContent : '')
+
     return finalResponse
   }
 
-  private logWorkflow(title: string, content: string, level: 'info' | 'warn' | 'error' = 'info') {
+  private logWorkflow(event: string, payload: Record<string, unknown>, level: 'info' | 'warn' | 'error' = 'info'): void {
     if (!this.workflowLogger) return
-    this.workflowLogger(level, `[工作流] ${title}\n${content}`, 'chat-workflow')
-  }
-
-  private serializeMessages(messages: ChatMessage[]): string {
-    return messages
-      .map((item, idx) => {
-        const toolCalls = Array.isArray(item.toolCalls)
-          ? item.toolCalls
-              .map((tc, tcIndex) => {
-                return `  toolCall#${tcIndex + 1}: ${tc.name} args=${JSON.stringify(tc.arguments || {})}`
-              })
-              .join('\n')
-          : ''
-        const toolCallId = item.toolCallId ? `\n  toolCallId=${item.toolCallId}` : ''
-        return `[${idx + 1}] role=${item.role}${toolCallId}\n${item.content || ''}${toolCalls ? `\n${toolCalls}` : ''}`
-      })
-      .join('\n\n')
+    const summary = Object.entries(payload)
+      .map(([key, value]) => `${key}=${typeof value === 'string' ? truncate(value.replace(/\s+/g, ' '), 240) : JSON.stringify(value)}`)
+      .join(' | ')
+    this.workflowLogger(level, `[workflow] ${event} | ${summary}`, 'chat-workflow')
   }
 
   private stringifyToolParameter(param: ToolParameter, required: boolean): string {
@@ -239,349 +231,469 @@ export class AIEngine {
         const params = Object.entries(tool.parameters || {})
           .map(([name, param]) => `${name}(${this.stringifyToolParameter(param, required.has(name))})`)
           .join(' ; ')
-        return `- ${tool.name}: ${tool.description} | 参数详情: ${params || '无参数'}`
+        return `- ${tool.name}: ${tool.description} | params: ${params || 'none'}`
       })
       .join('\n')
+  }
+
+  private mapWorkerModelToTaskType(modelType: WorkerModelType, inputPrompt: string): TaskType {
+    if (modelType === 'rp') return 'roleplay'
+    if (modelType === 'coder') return 'code_generation'
+    return /image|screenshot|vision|ocr|图片|图像|识别/.test(inputPrompt.toLowerCase()) ? 'vision' : 'premier'
+  }
+
+  private buildFallbackPlan(reason: string): WorkflowPlan {
+    this.logWorkflow('plan_fallback', { reason }, 'warn')
+    return {
+      workflow_id: `wf-${Date.now().toString(36)}`,
+      tasks: [
+        {
+          task_id: 'task_1',
+          model_type: 'tool',
+          input_prompt: 'Answer the user request directly and use tools only when required by the request.',
+          dependencies: [],
+          use_tools: true,
+        },
+      ],
+      final_intent: 'Respond clearly and faithfully based on actual execution results.',
+    }
+  }
+
+  private normalizeWorkflowPlan(raw: unknown): WorkflowPlan | null {
+    if (!isPlainObject(raw)) return null
+    const tasksRaw = Array.isArray(raw.tasks)
+      ? raw.tasks
+      : Array.isArray((raw as Record<string, unknown>).steps)
+        ? ((raw as Record<string, unknown>).steps as unknown[])
+        : []
+    if (!tasksRaw.length) return null
+
+    const taskIdSet = new Set<string>()
+    const normalizedTasks: WorkflowTask[] = []
+    for (let index = 0; index < tasksRaw.length; index += 1) {
+      const item = tasksRaw[index]
+      if (!isPlainObject(item)) continue
+      const modelType =
+        normalizeWorkerModelType(item.model_type) ||
+        normalizeWorkerModelType(item.taskType) ||
+        normalizeWorkerModelType(item.role)
+      if (!modelType) continue
+      const prompt = String(item.input_prompt || item.instruction || '').trim()
+      if (!prompt) continue
+      const taskId = String(item.task_id || `task_${index + 1}`).trim()
+      if (!taskId || taskIdSet.has(taskId)) continue
+      taskIdSet.add(taskId)
+
+      const depsRaw = Array.isArray(item.dependencies)
+        ? item.dependencies
+        : Array.isArray(item.dependency)
+          ? item.dependency
+          : []
+      const dependencies = depsRaw
+        .map((dep) => String(dep || '').trim())
+        .filter(Boolean)
+        .filter((dep) => dep !== taskId)
+
+      normalizedTasks.push({
+        task_id: taskId,
+        model_type: modelType,
+        input_prompt: prompt,
+        dependencies,
+        use_tools: toBool(item.use_tools ?? item.useTools, modelType === 'tool'),
+      })
+      if (normalizedTasks.length >= 8) break
+    }
+    if (!normalizedTasks.length) return null
+
+    const validTaskIds = new Set(normalizedTasks.map((task) => task.task_id))
+    normalizedTasks.forEach((task) => {
+      task.dependencies = task.dependencies.filter((dep) => validTaskIds.has(dep))
+    })
+
+    return {
+      workflow_id: String(raw.workflow_id || raw.workflowId || `wf-${Date.now().toString(36)}`).trim(),
+      tasks: normalizedTasks,
+      final_intent: String(raw.final_intent || raw.finalInstruction || '').trim() || 'Respond clearly and accurately.',
+    }
+  }
+
+  private extractJson(raw: string): unknown {
+    const text = String(raw || '').trim()
+    if (!text) return null
+    const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+    const candidate = fencedMatch ? fencedMatch[1] : text
+    const start = candidate.indexOf('{')
+    const end = candidate.lastIndexOf('}')
+    if (start < 0 || end <= start) return null
+    try {
+      return JSON.parse(candidate.slice(start, end + 1))
+    } catch {
+      return null
+    }
   }
 
   private async dispatchViaPremier(
     messages: ChatMessage[],
     tools: ToolDefinition[],
     invokeContext?: InvokeContext
-  ): Promise<WorkChainPlan> {
-    const { apiConfig, modelName } = this.resolveModelRoute('premier')
+  ): Promise<WorkflowPlan> {
     const latestUserText = getLastUserMessage(messages)?.content || ''
-    if (!latestUserText.trim()) {
-      return {
-        steps: [{ taskType: 'premier', instruction: '直接回答用户问题。', intent: '直接回复', useTools: false }],
-        finalInstruction: '输出简洁、准确、可执行的最终答复。',
-      }
-    }
-    if (!apiConfig || !modelName) {
-      return {
-        steps: [{ taskType: 'premier', instruction: '直接回答用户问题。', intent: '直接回复', useTools: false }],
-        finalInstruction: '输出简洁、准确、可执行的最终答复。',
-      }
-    }
+    if (!latestUserText.trim()) return this.buildFallbackPlan('empty_user_message')
+
+    const { apiConfig, modelName } = this.resolveModelRoute('premier')
+    if (!apiConfig || !modelName) return this.buildFallbackPlan('premier_route_unavailable')
 
     const plannerInput = await this.buildPlannerInput(messages, tools, invokeContext)
-    this.logWorkflow(
-      '总理模型规划请求',
-      [
-        `model=${modelName}`,
-        `plannerInput:\n${plannerInput}`,
-      ].join('\n\n')
-    )
     try {
       const response = await this.requestChatCompletion(apiConfig, {
         model: modelName,
         messages: [
-          { role: 'system', content: PREMIER_DISPATCH_PROMPT },
+          { role: 'system', content: PREMIER_WORKFLOW_PROMPT },
           { role: 'user', content: plannerInput },
         ],
       })
-      const raw = response.choices?.[0]?.message?.content || ''
-      const parsed = this.parseWorkChainPlan(raw)
-      this.logWorkflow(
-        '总理模型规划结果',
-        [
-          `raw:\n${raw || '空'}`,
-          `parsed:\n${JSON.stringify(parsed, null, 2)}`,
-        ].join('\n\n')
-      )
-      if (parsed.steps.length > 0) {
-        return parsed
+      const rawContent = response.choices?.[0]?.message?.content
+      const parsedPlan = this.normalizeWorkflowPlan(this.extractJson(typeof rawContent === 'string' ? rawContent : ''))
+      if (parsedPlan) {
+        this.logWorkflow('plan_created', {
+          workflow_id: parsedPlan.workflow_id,
+          task_count: parsedPlan.tasks.length,
+          task_ids: parsedPlan.tasks.map((task) => task.task_id).join(','),
+        })
+        return parsedPlan
       }
-    } catch (err) {
-      this.logWorkflow('总理模型规划失败', String(err), 'warn')
-      console.warn('[AIEngine] Premier dispatch failed, fallback to direct response:', err)
-    }
-
-    this.logWorkflow('总理模型规划降级', '使用单步 premier 直接回复。', 'warn')
-    return {
-      steps: [{ taskType: 'premier', instruction: '直接回答用户问题。', intent: '直接回复', useTools: true }],
-      finalInstruction: '输出简洁、准确、可执行的最终答复。',
+      return this.buildFallbackPlan('planner_output_not_parseable')
+    } catch (error) {
+      this.logWorkflow('plan_error', { message: error instanceof Error ? error.message : String(error) }, 'warn')
+      return this.buildFallbackPlan('planner_request_failed')
     }
   }
-
-  private parseWorkChainPlan(raw: string): WorkChainPlan {
-    const fallback: WorkChainPlan = {
-      steps: [{ taskType: 'premier', instruction: '直接回答用户问题。', intent: '直接回复', useTools: true }],
-      finalInstruction: '输出简洁、准确、可执行的最终答复。',
-    }
-    const jsonMatch = raw.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return fallback
-    let parsed: any
-    try {
-      parsed = JSON.parse(jsonMatch[0])
-    } catch {
-      return fallback
-    }
-    const stepsRaw = Array.isArray(parsed?.steps)
-      ? parsed.steps
-      : Array.isArray(parsed?.chain)
-        ? parsed.chain
-        : []
-    const taskTypes: TaskType[] = [
-      'roleplay',
-      'context_compression',
-      'memory_fragmentation',
-      'vision',
-      'code_generation',
-      'premier',
-    ]
-    const steps: WorkChainStep[] = stepsRaw
-      .map((item: any) => {
-        const taskType = taskTypes.includes(item?.taskType) ? item.taskType : 'premier'
-        const instruction = String(item?.instruction || '').trim()
-        const intent = String(item?.intent || '').trim()
-        const useTools = item?.useTools !== false
-        return { taskType, instruction, intent, useTools }
+  private buildDependencySummary(dependencies: TaskExecutionResult[]): string {
+    if (!dependencies.length) return 'none'
+    return dependencies
+      .map((item) => {
+        const toolPart =
+          item.toolOutputs.length > 0
+            ? ` | tools=${item.toolOutputs.map((tool) => `${tool.name}${tool.isError ? '(error)' : ''}`).join(',')}`
+            : ''
+        return `${item.task_id}(${item.model_type}): ${truncate(item.output, 500)}${toolPart}`
       })
-      .filter((item: WorkChainStep) => item.instruction || item.taskType === 'premier')
-      .slice(0, 4)
-    if (steps.length === 0) return fallback
+      .join('\n')
+  }
+
+  private buildPersonaHints(preparedMessages: ChatMessage[]): string {
+    const systemMessages = preparedMessages
+      .filter((item) => item.role === 'system')
+      .map((item) => item.content.trim())
+      .filter(Boolean)
+    if (!systemMessages.length) return 'none'
+    return truncate(systemMessages.join('\n\n'), 1200)
+  }
+
+  private buildTaskMessages(
+    task: WorkflowTask,
+    latestUserText: string,
+    preparedMessages: ChatMessage[],
+    dependencyResults: TaskExecutionResult[],
+    finalIntent: string
+  ): ChatMessage[] {
+    const dependencySummary = this.buildDependencySummary(dependencyResults)
+    const personaHints = this.buildPersonaHints(preparedMessages)
+
+    let systemInstruction = ''
+    let userInstruction = ''
+
+    if (task.model_type === 'rp') {
+      systemInstruction =
+        'You are the RP worker. Produce user-facing text with tone/persona intent only. Do not include tool internals or code unless explicitly required.'
+      userInstruction = [
+        `final_intent: ${finalIntent}`,
+        `persona_hints: ${personaHints}`,
+        `task_instruction: ${task.input_prompt}`,
+        `latest_user_message: ${latestUserText}`,
+        `dependency_outputs:\n${dependencySummary}`,
+      ].join('\n\n')
+    } else if (task.model_type === 'coder') {
+      systemInstruction =
+        'You are the Coder worker. Focus on concrete technical output. Avoid conversational filler and avoid unrelated context.'
+      userInstruction = [
+        `task_instruction: ${task.input_prompt}`,
+        `latest_user_message: ${latestUserText}`,
+        `required_dependency_outputs:\n${dependencySummary}`,
+      ].join('\n\n')
+    } else {
+      systemInstruction =
+        'You are the Tool worker. Convert instruction into precise execution-oriented output. Call tools when needed and do not fabricate tool results.'
+      userInstruction = [
+        `task_instruction: ${task.input_prompt}`,
+        `latest_user_message: ${latestUserText}`,
+        `dependency_outputs:\n${dependencySummary}`,
+      ].join('\n\n')
+    }
+
+    return [
+      {
+        id: `task-system-${task.task_id}-${Date.now()}`,
+        role: 'system',
+        content: systemInstruction,
+        timestamp: Date.now(),
+      },
+      {
+        id: `task-user-${task.task_id}-${Date.now()}`,
+        role: 'user',
+        content: userInstruction,
+        timestamp: Date.now(),
+      },
+    ]
+  }
+
+  private async executeSingleTask(
+    task: WorkflowTask,
+    plan: WorkflowPlan,
+    preparedMessages: ChatMessage[],
+    completedMap: Map<string, TaskExecutionResult>,
+    apiConfigId: string | undefined,
+    model: string | undefined,
+    tools: ToolDefinition[]
+  ): Promise<TaskExecutionResult> {
+    const routeTaskType = this.mapWorkerModelToTaskType(task.model_type, task.input_prompt)
+    const { apiConfig, modelName } = this.resolveModelRoute(routeTaskType, apiConfigId, model)
+    if (!apiConfig) throw new Error(`No API route found for task ${task.task_id} (${routeTaskType}).`)
+    if (!modelName) throw new Error(`No model found for task ${task.task_id} (${routeTaskType}).`)
+
+    const latestUserText = getLastUserMessage(preparedMessages)?.content || ''
+    const dependencyResults = task.dependencies
+      .map((dep) => completedMap.get(dep))
+      .filter((item): item is TaskExecutionResult => Boolean(item))
+
+    const taskMessages = this.buildTaskMessages(task, latestUserText, preparedMessages, dependencyResults, plan.final_intent)
+    const shouldUseTools = task.use_tools && Boolean(this.toolExecutor) && tools.length > 0
+
+    this.logWorkflow('task_start', {
+      workflow_id: plan.workflow_id,
+      task_id: task.task_id,
+      model_type: task.model_type,
+      route_task_type: routeTaskType,
+      model: modelName,
+      deps: task.dependencies.join(',') || 'none',
+      use_tools: shouldUseTools,
+    })
+
+    let response = await this.requestChatCompletion(
+      apiConfig,
+      this.buildRequestBody(modelName, taskMessages, shouldUseTools ? tools : [])
+    )
+
+    const firstMessage = response.choices?.[0]?.message
+    const toolOutputs: Array<{ name: string; content: string; isError?: boolean }> = []
+
+    if (shouldUseTools && firstMessage?.tool_calls?.length && this.toolExecutor) {
+      const toolMessages: ChatMessage[] = []
+      for (const toolCall of firstMessage.tool_calls) {
+        const name = toolCall.function?.name || ''
+        let parsedArgs: Record<string, unknown> = {}
+        try {
+          parsedArgs = JSON.parse(toolCall.function?.arguments || '{}')
+        } catch {
+          parsedArgs = {}
+        }
+
+        const result = await this.toolExecutor(name, parsedArgs)
+        toolOutputs.push({ name, content: result.content || '', isError: result.isError })
+        toolMessages.push({
+          id: `tool-${task.task_id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          role: 'tool',
+          content: result.content || '',
+          timestamp: Date.now(),
+          toolCallId: toolCall.id,
+        })
+      }
+
+      const followUpMessages: ChatMessage[] = [
+        ...taskMessages,
+        {
+          id: `assistant-tool-call-${task.task_id}-${Date.now()}`,
+          role: 'assistant',
+          content: (typeof firstMessage.content === 'string' ? firstMessage.content : '') || '',
+          timestamp: Date.now(),
+          toolCalls: firstMessage.tool_calls.map((item) => ({
+            id: item.id,
+            name: item.function.name,
+            arguments: (() => {
+              try {
+                return JSON.parse(item.function.arguments || '{}')
+              } catch {
+                return {}
+              }
+            })(),
+          })),
+        },
+        ...toolMessages,
+        {
+          id: `tool-followup-${task.task_id}-${Date.now()}`,
+          role: 'system',
+          content: 'Based on tool outputs, provide the final result for this task. Do not repeat unnecessary text.',
+          timestamp: Date.now(),
+        },
+      ]
+
+      response = await this.requestChatCompletion(
+        apiConfig,
+        this.buildRequestBody(modelName, followUpMessages, shouldUseTools ? tools : [])
+      )
+    }
+
+    const outputContent = response.choices?.[0]?.message?.content
+    const output = typeof outputContent === 'string' ? outputContent : ''
+
+    this.logWorkflow('task_done', {
+      workflow_id: plan.workflow_id,
+      task_id: task.task_id,
+      output_length: output.length,
+      tool_calls: toolOutputs.length,
+      tool_errors: toolOutputs.filter((item) => item.isError).length,
+    })
+
     return {
-      steps,
-      finalInstruction: String(parsed?.finalInstruction || '').trim() || fallback.finalInstruction,
+      task_id: task.task_id,
+      model_type: task.model_type,
+      routeTaskType,
+      modelName,
+      input_prompt: task.input_prompt,
+      dependencies: [...task.dependencies],
+      output,
+      toolOutputs,
     }
   }
 
-  private async executeWorkChain(
-    steps: WorkChainStep[],
+  private async executeWorkflowPlan(
+    plan: WorkflowPlan,
     preparedMessages: ChatMessage[],
     apiConfigId?: string,
     model?: string,
     tools: ToolDefinition[] = []
-  ): Promise<StepExecutionResult[]> {
-    const latestUserText = getLastUserMessage(preparedMessages)?.content || ''
-    const results: StepExecutionResult[] = []
-    for (let index = 0; index < steps.length; index += 1) {
-      const step = steps[index]
-      const { apiConfig, modelName } = this.resolveModelRoute(step.taskType, apiConfigId, model)
-      if (!apiConfig) {
-        throw new Error('未配置可用 API，请先在设置页添加 API 配置。')
-      }
-      if (!modelName) {
-        throw new Error(`任务类型 "${step.taskType}" 未配置模型，请在设置中配置。`)
-      }
-      this.abortController = new AbortController()
+  ): Promise<TaskExecutionResult[]> {
+    const pending = new Map<string, WorkflowTask>(plan.tasks.map((task) => [task.task_id, { ...task }]))
+    const completed = new Map<string, TaskExecutionResult>()
+    const orderedTaskIds = plan.tasks.map((task) => task.task_id)
 
-      const contextSnippet = results
-        .map((item, idx) => {
-          const toolPart =
-            item.toolOutputs.length > 0
-              ? `\n工具结果:\n${item.toolOutputs.map((x) => `- ${x.name}: ${x.content}`).join('\n')}`
-              : ''
-          return `步骤${idx + 1}(${item.taskType}/${item.modelName}): ${item.content}${toolPart}`
-        })
-        .join('\n\n')
-      const stepPrompt = [
-        `任务类型: ${step.taskType}`,
-        `步骤目标: ${step.intent || '按指令完成'} `,
-        `执行指令: ${step.instruction || '围绕用户需求完成该步骤。'}`,
-        contextSnippet ? `已有步骤结果:\n${contextSnippet}` : '',
-        `用户原始输入: ${latestUserText}`,
-      ]
-        .filter(Boolean)
-        .join('\n\n')
+    let guard = 0
+    while (pending.size > 0) {
+      guard += 1
+      if (guard > plan.tasks.length + 5) {
+        this.logWorkflow('dag_guard_break', { workflow_id: plan.workflow_id, pending: Array.from(pending.keys()) }, 'warn')
+        break
+      }
 
-      const stepMessages: ChatMessage[] = [
-        {
-          id: `step-system-${Date.now()}`,
-          role: 'system',
-          content:
-            '你是工作流中的执行模型。请严格按执行指令输出该步骤结果；如果需要工具，调用 function tool。不要输出与当前步骤无关的内容。',
-          timestamp: Date.now(),
-        },
-        {
-          id: `step-user-${Date.now()}`,
-          role: 'user',
-          content: stepPrompt,
-          timestamp: Date.now(),
-        },
-      ]
-      this.logWorkflow(
-        `步骤${index + 1}请求`,
-        [
-          `taskType=${step.taskType}`,
-          `model=${modelName}`,
-          `useTools=${step.useTools !== false}`,
-          `stepPrompt:\n${stepPrompt}`,
-          `stepMessages:\n${this.serializeMessages(stepMessages)}`,
-        ].join('\n\n')
+      const runnable = Array.from(pending.values()).filter((task) =>
+        task.dependencies.every((dependency) => completed.has(dependency))
       )
 
-      let response = await this.requestChatCompletion(
-        apiConfig,
-        this.buildRequestBody(modelName, stepMessages, step.useTools ? tools : [])
-      )
-      const message = response.choices?.[0]?.message
-      const toolOutputs: Array<{ name: string; content: string; isError?: boolean }> = []
-      if (step.useTools && message?.tool_calls && message.tool_calls.length > 0 && this.toolExecutor) {
-        const toolMessages: ChatMessage[] = []
+      const tasksToRun = runnable.length ? runnable : [Array.from(pending.values())[0]]
+      if (!runnable.length) {
         this.logWorkflow(
-          `步骤${index + 1}工具调用计划`,
-          message.tool_calls
-            .map((toolCall, callIndex) => `#${callIndex + 1} ${toolCall.function?.name} args=${toolCall.function?.arguments || '{}'}`)
-            .join('\n')
-        )
-        for (const toolCall of message.tool_calls) {
-          const name = toolCall.function?.name || ''
-          let args: Record<string, unknown> = {}
-          try {
-            args = JSON.parse(toolCall.function?.arguments || '{}')
-          } catch {
-            args = {}
-          }
-          const result = await this.toolExecutor(name, args)
-          this.logWorkflow(
-            `步骤${index + 1}工具调用结果`,
-            [
-              `tool=${name}`,
-              `args=${JSON.stringify(args)}`,
-              `isError=${Boolean(result.isError)}`,
-              `content=\n${result.content || ''}`,
-            ].join('\n')
-          )
-          toolOutputs.push({ name, content: result.content || '', isError: result.isError })
-          toolMessages.push({
-            id: `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            role: 'tool',
-            content: result.content || '',
-            timestamp: Date.now(),
-            toolCallId: toolCall.id,
-          })
-        }
-        const followUpMessages: ChatMessage[] = [
-          ...stepMessages,
+          'dag_fallback_force_run',
           {
-            id: `assistant-tool-call-${Date.now()}`,
-            role: 'assistant',
-            content: message.content || '',
-            timestamp: Date.now(),
-            toolCalls: message.tool_calls.map((item) => ({
-              id: item.id,
-              name: item.function.name,
-              arguments: (() => {
-                try {
-                  return JSON.parse(item.function.arguments || '{}')
-                } catch {
-                  return {}
-                }
-              })(),
-            })),
+            workflow_id: plan.workflow_id,
+            forced_task: tasksToRun[0].task_id,
+            unresolved_dependencies: tasksToRun[0].dependencies,
           },
-          ...toolMessages,
-          {
-            id: `step-followup-${Date.now()}`,
-            role: 'system',
-            content: '基于工具结果，输出该步骤的最终结果，避免重复。',
-            timestamp: Date.now(),
-          },
-        ]
-        response = await this.requestChatCompletion(
-          apiConfig,
-          this.buildRequestBody(modelName, followUpMessages, step.useTools ? tools : [])
-        )
-        this.logWorkflow(
-          `步骤${index + 1}工具回填后续请求`,
-          this.serializeMessages(followUpMessages)
+          'warn'
         )
       }
-      const stepResult = {
-        taskType: step.taskType,
-        modelName,
-        instruction: step.instruction,
-        content: response.choices?.[0]?.message?.content || '',
-        toolOutputs,
-      }
-      this.logWorkflow(
-        `步骤${index + 1}执行结果`,
-        [
-          `taskType=${stepResult.taskType}`,
-          `model=${stepResult.modelName}`,
-          `instruction=${stepResult.instruction}`,
-          `content=\n${stepResult.content || ''}`,
-          stepResult.toolOutputs.length > 0
-            ? `toolOutputs=\n${stepResult.toolOutputs
-                .map((item) => `${item.name}${item.isError ? '(error)' : ''}: ${item.content}`)
-                .join('\n')}`
-            : 'toolOutputs=none',
-        ].join('\n\n')
+
+      const batchResults = await Promise.all(
+        tasksToRun.map((task) =>
+          this.executeSingleTask(task, plan, preparedMessages, completed, apiConfigId, model, tools)
+        )
       )
-      results.push(stepResult)
+      batchResults.forEach((result) => {
+        completed.set(result.task_id, result)
+        pending.delete(result.task_id)
+      })
     }
-    return results
+
+    return orderedTaskIds
+      .map((taskId) => completed.get(taskId))
+      .filter((item): item is TaskExecutionResult => Boolean(item))
   }
 
   private async buildFinalResponse(
-    plan: WorkChainPlan,
+    plan: WorkflowPlan,
     preparedMessages: ChatMessage[],
-    stepResults: StepExecutionResult[],
+    taskResults: TaskExecutionResult[],
     apiConfigId?: string,
     model?: string
   ): Promise<ChatCompletionResponse> {
     const latestUserText = getLastUserMessage(preparedMessages)?.content || ''
-    const summary = stepResults
-      .map((item, idx) => {
+
+    const summary = taskResults
+      .map((result) => {
         const toolPart =
-          item.toolOutputs.length > 0
-            ? `\n工具调用结果:\n${item.toolOutputs.map((x) => `- ${x.name}${x.isError ? '(失败)' : ''}: ${x.content}`).join('\n')}`
+          result.toolOutputs.length > 0
+            ? `\nTool outputs:\n${result.toolOutputs
+                .map((tool) => `- ${tool.name}${tool.isError ? ' (error)' : ''}: ${truncate(tool.content, 400)}`)
+                .join('\n')}`
             : ''
-        return `步骤${idx + 1}(${item.taskType}/${item.modelName})\n指令: ${item.instruction}\n结果: ${item.content}${toolPart}`
+        return [
+          `Task ${result.task_id}`,
+          `model_type: ${result.model_type}`,
+          `route_task_type: ${result.routeTaskType}`,
+          `instruction: ${truncate(result.input_prompt, 600)}`,
+          `result: ${truncate(result.output, 1800)}`,
+          toolPart,
+        ]
+          .filter(Boolean)
+          .join('\n')
       })
       .join('\n\n')
 
     const { apiConfig, modelName } = this.resolveModelRoute('premier', apiConfigId, model)
     if (!apiConfig || !modelName) {
       const fallbackText =
-        stepResults.map((item) => item.content).find((text) => String(text || '').trim().length > 0) || '未获得可用结果。'
+        taskResults.map((item) => item.output).find((text) => String(text || '').trim().length > 0) ||
+        'No usable result was produced.'
       return {
         choices: [{ message: { role: 'assistant', content: fallbackText }, finish_reason: 'stop' }],
         meta: {
-          model: stepResults[0]?.modelName || '',
-          taskType: stepResults[0]?.taskType || 'premier',
+          model: taskResults[0]?.modelName || '',
+          taskType: taskResults[0]?.routeTaskType || 'premier',
         },
       }
     }
+
     const finalMessages: ChatMessage[] = [
       {
         id: `final-system-${Date.now()}`,
         role: 'system',
         content:
-          '你是最终答复阶段的总理模型。请基于步骤结果给用户输出最终回复。必须忠实引用步骤与工具结果，不得编造未执行结果。',
+          'You are the orchestrator final synthesis stage. Build the final user response strictly from executed task outputs and tool results. Do not fabricate.',
         timestamp: Date.now(),
       },
       {
-        id: `final-system-2-${Date.now()}`,
+        id: `final-system-intent-${Date.now()}`,
         role: 'system',
-        content: `最终回复要求：${plan.finalInstruction || '输出简洁、准确、可执行的最终答复。'}`,
+        content: `final_intent: ${plan.final_intent}`,
         timestamp: Date.now(),
       },
       {
         id: `final-user-${Date.now()}`,
         role: 'user',
-        content: `用户原始请求：${latestUserText}\n\n工作流结果：\n${summary || '无'}`,
+        content: `Original user request:\n${latestUserText}\n\nExecution log:\n${summary || 'none'}`,
         timestamp: Date.now(),
       },
     ]
-    this.logWorkflow(
-      '最终汇总请求',
-      [
-        `model=${modelName}`,
-        `plan=${JSON.stringify(plan, null, 2)}`,
-        `stepSummary=\n${summary || '无'}`,
-      ].join('\n\n')
-    )
-    const response = await this.requestChatCompletion(apiConfig, this.buildRequestBody(modelName, finalMessages, []))
-    response.meta = {
+
+    this.logWorkflow('final_synthesis', {
+      workflow_id: plan.workflow_id,
       model: modelName,
-      taskType: 'premier',
-    }
+      task_count: taskResults.length,
+    })
+
+    const response = await this.requestChatCompletion(apiConfig, this.buildRequestBody(modelName, finalMessages, []))
+    response.meta = { model: modelName, taskType: 'premier' }
     return response
   }
-
   private async buildPlannerInput(
     messages: ChatMessage[],
     tools: ToolDefinition[],
@@ -595,6 +707,7 @@ export class AIEngine {
       .map((item) => `[${item.role}] ${item.content}`)
       .join('\n')
       .slice(0, 3500)
+
     const memorySummary =
       allConfig.agentChain.enableMemory && allConfig.memoryLayers.subconsciousEnabled
         ? this.memoryManager
@@ -604,9 +717,10 @@ export class AIEngine {
               allConfig.agentChain.memoryMinScore || 0.22,
               allConfig.agentChain.memoryDeduplicate !== false
             )
-            .map((item, idx) => `${idx + 1}. ${item.text}`)
+            .map((item, index) => `${index + 1}. ${item.text}`)
             .join('\n')
         : ''
+
     const toolSummary = this.serializeTools(tools)
     const fileSummary = await this.buildWatchFilesSnapshot(allConfig.watchFolders || [])
     const triggerSummary = invokeContext
@@ -616,22 +730,24 @@ export class AIEngine {
       : 'text_input'
 
     return [
-      `触发原因: ${triggerSummary}`,
-      `用户最新输入:\n${latestUserText}`,
-      `最近上下文摘要:\n${contextSummary || '无'}`,
-      `潜意识记忆匹配:\n${memorySummary || '无'}`,
-      `可用工具:\n${toolSummary || '无'}`,
-      `可操作文件清单(来自监听目录):\n${fileSummary || '无'}`,
+      `Trigger: ${triggerSummary}`,
+      `Latest user input:\n${latestUserText}`,
+      `Recent context summary:\n${contextSummary || 'none'}`,
+      `Memory snippets:\n${memorySummary || 'none'}`,
+      `Available tools:\n${toolSummary || 'none'}`,
+      `Watchable files snapshot:\n${fileSummary || 'none'}`,
     ].join('\n\n')
   }
 
   private async buildWatchFilesSnapshot(folders: string[]): Promise<string> {
     const normalizedFolders = folders.map((item) => String(item || '').trim()).filter(Boolean)
-    if (normalizedFolders.length === 0) return '无监听目录'
+    if (!normalizedFolders.length) return 'no watch folders'
+
     const maxFiles = 120
     const maxDepth = 3
     const files: string[] = []
-    const scan = async (root: string, current: string, depth: number) => {
+
+    const scan = async (root: string, current: string, depth: number): Promise<void> => {
       if (files.length >= maxFiles || depth > maxDepth) return
       let entries: fs.Dirent[] = []
       try {
@@ -647,16 +763,16 @@ export class AIEngine {
           continue
         }
         if (entry.isFile()) {
-          const relative = path.relative(root, fullPath).replace(/\\/g, '/')
-          files.push(`${path.basename(root)}/${relative}`)
+          files.push(`${path.basename(root)}/${path.relative(root, fullPath).replace(/\\/g, '/')}`)
         }
       }
     }
+
     for (const folder of normalizedFolders) {
       await scan(folder, folder, 0)
       if (files.length >= maxFiles) break
     }
-    return files.length > 0 ? files.join('\n') : '无可读文件'
+    return files.length ? files.join('\n') : 'no readable files'
   }
 
   private async prepareContext(messages: ChatMessage[], taskType: TaskType): Promise<PreparedContext> {
@@ -666,7 +782,7 @@ export class AIEngine {
     if (allConfig.agentChain.enableRoundSummary) {
       const triggerTurns = Math.max(20, allConfig.agentChain.roundSummaryTriggerTurns || 100)
       const headTurns = Math.max(10, allConfig.agentChain.roundSummaryHeadTurns || 50)
-      const hasRoundSummary = working.some((m) => m.role === 'system' && m.content.includes('[轮次摘要]'))
+      const hasRoundSummary = working.some((message) => message.role === 'system' && message.content.includes('[round-summary]'))
       if (!hasRoundSummary && nonSystemTurnCount(working) >= triggerTurns) {
         working = await this.roundSummarizeContext(working, headTurns)
       }
@@ -674,14 +790,12 @@ export class AIEngine {
 
     if (allConfig.agentChain.enableMemory) {
       if (allConfig.memoryLayers.instinctEnabled && allConfig.memoryLayers.instinctMemories.length > 0) {
-        const instinctPrompt = allConfig.memoryLayers.instinctMemories
-          .map((item, idx) => `${idx + 1}. ${item}`)
-          .join('\n')
+        const instinctPrompt = allConfig.memoryLayers.instinctMemories.map((item, index) => `${index + 1}. ${item}`).join('\n')
         working = [
           {
             id: `instinct-${Date.now()}`,
             role: 'system',
-            content: `【本能层记忆】以下规则始终优先：\n${instinctPrompt}`,
+            content: `Core behavior rules:\n${instinctPrompt}`,
             timestamp: Date.now(),
           },
           ...working,
@@ -714,9 +828,7 @@ export class AIEngine {
     let nonSystemCount = 0
     let splitIndex = messages.length
     for (let i = 0; i < messages.length; i += 1) {
-      if (messages[i].role !== 'system') {
-        nonSystemCount += 1
-      }
+      if (messages[i].role !== 'system') nonSystemCount += 1
       if (nonSystemCount >= headTurns) {
         splitIndex = i + 1
         break
@@ -726,12 +838,9 @@ export class AIEngine {
 
     const head = messages.slice(0, splitIndex)
     const tail = messages.slice(splitIndex)
-    const serialized = head
-      .map((m) => `[${m.role}] ${m.content}`)
-      .join('\n')
-      .slice(0, 12000)
+    const serialized = head.map((message) => `[${message.role}] ${message.content}`).join('\n').slice(0, 12000)
 
-    let summaryText = '已对早期上下文进行轮次摘要。'
+    let summaryText = 'Early context was summarized.'
     try {
       const { apiConfig, modelName } = this.resolveModelRoute('context_compression')
       if (apiConfig && modelName) {
@@ -740,22 +849,24 @@ export class AIEngine {
           messages: [
             {
               role: 'system',
-              content: '请将以下早期对话总结成结构化要点，重点保留用户偏好、约束、待办、已完成事项，100-180字。',
+              content:
+                'Summarize early conversation as structured bullets. Keep user goals, constraints, pending tasks, and completed tasks. 100-180 words.',
             },
             { role: 'user', content: serialized },
           ],
         })
-        summaryText = response.choices?.[0]?.message?.content || summaryText
+        const content = response.choices?.[0]?.message?.content
+        if (typeof content === 'string' && content.trim()) summaryText = content
       }
     } catch {
-      summaryText = `轮次摘要（降级）: ${serialized.slice(0, 220)}...`
+      summaryText = `round-summary-fallback: ${truncate(serialized, 220)}`
     }
 
     return [
       {
         id: `round-summary-${Date.now()}`,
         role: 'system',
-        content: `[轮次摘要] ${summaryText}`,
+        content: `[round-summary] ${summaryText}`,
         timestamp: Date.now(),
       },
       ...tail,
@@ -768,12 +879,9 @@ export class AIEngine {
 
     const head = messages.slice(0, messages.length - safeKeep)
     const tail = messages.slice(messages.length - safeKeep)
-    const serialized = head
-      .map((m) => `[${m.role}] ${m.content}`)
-      .join('\n')
-      .slice(0, 12000)
+    const serialized = head.map((message) => `[${message.role}] ${message.content}`).join('\n').slice(0, 12000)
 
-    let summaryText = '历史上下文较长，已进行压缩摘要。'
+    let summaryText = 'History context was compressed.'
     try {
       const { apiConfig, modelName } = this.resolveModelRoute('context_compression')
       if (apiConfig && modelName) {
@@ -782,25 +890,24 @@ export class AIEngine {
           messages: [
             {
               role: 'system',
-              content: '请将以下对话历史压缩为要点，保留用户目标、约束、已完成和待完成事项，100-180字。',
+              content:
+                'Compress chat history into concise bullets. Keep user goals, constraints, done work, and remaining work. 100-180 words.',
             },
-            {
-              role: 'user',
-              content: serialized,
-            },
+            { role: 'user', content: serialized },
           ],
         })
-        summaryText = response.choices?.[0]?.message?.content || summaryText
+        const content = response.choices?.[0]?.message?.content
+        if (typeof content === 'string' && content.trim()) summaryText = content
       }
     } catch {
-      summaryText = `历史摘要（降级）: ${serialized.slice(0, 220)}...`
+      summaryText = `history-summary-fallback: ${truncate(serialized, 220)}`
     }
 
     return [
       {
         id: `summary-${Date.now()}`,
         role: 'system',
-        content: `这是历史对话压缩摘要，请保持一致性：${summaryText}`,
+        content: `Compressed history summary: ${summaryText}`,
         timestamp: Date.now(),
       },
       ...tail,
@@ -810,20 +917,13 @@ export class AIEngine {
   private rememberIfNeeded(messages: ChatMessage[], assistantContent: string): void {
     const config = this.configManager.getAll()
     if (!config.agentChain.enableMemory) return
-
     const maxItems = config.agentChain.memoryMaxItems
-    for (const msg of messages) {
-      if (msg.role !== 'user') continue
-      const candidates = pickMemoryCandidates(msg.content)
-      for (const candidate of candidates) {
-        this.memoryManager.remember(candidate, maxItems)
-      }
-    }
 
-    const assistantCandidates = pickMemoryCandidates(assistantContent)
-    for (const candidate of assistantCandidates) {
-      this.memoryManager.remember(candidate, maxItems)
-    }
+    messages.forEach((message) => {
+      if (message.role !== 'user') return
+      pickMemoryCandidates(message.content).forEach((candidate) => this.memoryManager.remember(candidate, maxItems))
+    })
+    pickMemoryCandidates(assistantContent).forEach((candidate) => this.memoryManager.remember(candidate, maxItems))
   }
 
   private resolveCustomRequestBody(): Record<string, unknown> {
@@ -837,67 +937,61 @@ export class AIEngine {
   private buildRequestBody(modelName: string, messages: ChatMessage[], tools?: ToolDefinition[]): ChatCompletionRequest {
     const baseBody: ChatCompletionRequest = {
       model: modelName,
-      messages: messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-        ...(m.toolCalls
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        ...(message.toolCalls
           ? {
-              tool_calls: m.toolCalls.map((tc) => ({
-                id: tc.id,
+              tool_calls: message.toolCalls.map((toolCall) => ({
+                id: toolCall.id,
                 type: 'function' as const,
-                function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+                function: { name: toolCall.name, arguments: JSON.stringify(toolCall.arguments) },
               })),
             }
           : {}),
-        ...(m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
+        ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
       })),
-      ...(tools && tools.length > 0
+      ...(tools?.length
         ? {
-            tools: tools.map((t) => ({
+            tools: tools.map((tool) => ({
               type: 'function' as const,
               function: {
-                name: t.name,
-                description: t.description,
+                name: tool.name,
+                description: tool.description,
                 parameters: {
                   type: 'object',
-                  properties: t.parameters,
-                  required: t.required || [],
+                  properties: tool.parameters,
+                  required: tool.required || [],
                 },
               },
             })),
           }
         : {}),
     }
-    const customBody = this.resolveCustomRequestBody()
-    return {
-      ...customBody,
-      ...baseBody,
-    }
+
+    return { ...this.resolveCustomRequestBody(), ...baseBody }
   }
 
-  private async requestChatCompletion(
-    apiConfig: ApiConfig,
-    requestBody: ChatCompletionRequest
-  ): Promise<ChatCompletionResponse> {
-    this.logWorkflow('模型请求体(JSON)', JSON.stringify(requestBody, null, 2))
-    const response = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiConfig.apiKey}`,
-      },
-      body: JSON.stringify(requestBody),
-      signal: this.abortController?.signal,
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`API 请求失败（${response.status}）：${errorText}`)
+  private async requestChatCompletion(apiConfig: ApiConfig, requestBody: ChatCompletionRequest): Promise<ChatCompletionResponse> {
+    const controller = new AbortController()
+    this.abortControllers.add(controller)
+    try {
+      const response = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiConfig.apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      })
+      if (!response.ok) {
+        throw new Error(`API request failed (${response.status}): ${await response.text()}`)
+      }
+      return (await response.json()) as ChatCompletionResponse
+    } finally {
+      this.abortControllers.delete(controller)
     }
-
-    const parsed = (await response.json()) as ChatCompletionResponse
-    this.logWorkflow('模型响应体(JSON)', JSON.stringify(parsed, null, 2))
-    return parsed
   }
 
   private resolveModelRoute(
@@ -908,35 +1002,23 @@ export class AIEngine {
     const allConfig = this.configManager.getAll()
 
     if (apiConfigId) {
-      const apiConfig = allConfig.apiConfigs.find((c) => c.id === apiConfigId) || null
-      return {
-        apiConfig,
-        modelName: model || apiConfig?.defaultModel || '',
-      }
+      const apiConfig = allConfig.apiConfigs.find((item) => item.id === apiConfigId) || null
+      return { apiConfig, modelName: model || apiConfig?.defaultModel || '' }
     }
 
-    // Use the new modelAssignments
     const assignment = allConfig.modelAssignments?.[taskType]
     if (assignment?.apiConfigId && assignment?.model) {
-      const apiConfig = allConfig.apiConfigs.find((c) => c.id === assignment.apiConfigId) || null
-      if (apiConfig) {
-        return {
-          apiConfig,
-          modelName: assignment.model,
-        }
-      }
+      const apiConfig = allConfig.apiConfigs.find((item) => item.id === assignment.apiConfigId) || null
+      if (apiConfig) return { apiConfig, modelName: assignment.model }
     }
 
-    // Fallback to first API config
     const fallbackApi = allConfig.apiConfigs[0] || null
-    return {
-      apiConfig: fallbackApi,
-      modelName: model || fallbackApi?.defaultModel || '',
-    }
+    return { apiConfig: fallbackApi, modelName: model || fallbackApi?.defaultModel || '' }
   }
 
   abort(): void {
-    this.abortController?.abort()
-    this.abortController = null
+    for (const controller of this.abortControllers) controller.abort()
+    this.abortControllers.clear()
   }
 }
+
