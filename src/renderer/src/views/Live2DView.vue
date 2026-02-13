@@ -7,10 +7,6 @@
       @wheel.prevent="handleModelWheel"
     />
 
-    <div v-if="replyText" ref="replyBubbleRef" class="reply-bubble" :style="replyBubbleStyle" @click.stop>
-      <div class="reply-content">{{ replyText }}</div>
-    </div>
-
     <div
       v-if="controlsState.visible"
       ref="dialogDockRef"
@@ -27,6 +23,9 @@
         </select>
         <button type="button" class="create-context-btn" @click="createConversation">+</button>
         <button type="button" @click="clearConversation">清空上下文</button>
+      </div>
+      <div v-if="replyText" ref="replyBubbleRef" class="dialog-output" @click.stop>
+        <div class="reply-content">{{ replyText }}</div>
       </div>
       <div class="dialog-input">
         <input
@@ -1145,7 +1144,7 @@ function isPointInsideModel(clientX: number, clientY: number): boolean {
 
 function isPointerOnInteractiveElement(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false
-  return Boolean(target.closest('.control-widget, .control-panel, .reply-bubble, .dialog-dock'))
+  return Boolean(target.closest('.control-widget, .control-panel, .dialog-dock'))
 }
 
 function clampModelWithinViewport() {
@@ -1727,25 +1726,25 @@ canvas {
   -webkit-app-region: no-drag;
 }
 
-.reply-bubble {
-  position: absolute;
-  max-width: 90%;
-  z-index: 100;
-  animation: fadeIn 0.3s ease;
-  -webkit-app-region: no-drag;
+.dialog-output {
+  width: 100%;
+  animation: fadeIn 0.24s ease;
 }
 
 .reply-content {
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid rgba(15, 23, 42, 0.1);
-  border-radius: 14px;
-  padding: 10px 14px;
+  border-radius: 10px;
+  padding: 8px 12px;
   font-size: 13px;
   color: #303133;
-  line-height: 1.5;
-  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.18);
+  line-height: 1.45;
+  max-height: calc(1.45em * 2 + 10px);
+  min-height: calc(1.45em * 2 + 10px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
   white-space: pre-wrap;
-  overflow: visible;
   word-break: break-word;
 }
 
