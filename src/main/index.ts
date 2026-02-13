@@ -430,7 +430,6 @@ class Application {
 
     const contextMenu = Menu.buildFromTemplate([
       { label: '打开设置', click: () => this.openMainRoute('settings') },
-      { label: '显示/隐藏 AI 面板', click: () => this.toggleChatWindow() },
       { label: '显示/隐藏 Live2D', click: () => this.toggleLive2DWindow() },
       { type: 'separator' },
       { label: '退出程序', click: () => this.requestQuit() },
@@ -454,12 +453,8 @@ class Application {
       'CommandOrControl+Shift+H'
     )
 
-    const chatHandler = () => {
-      this.toggleChatWindow()
-    }
     const live2dHandler = () => this.toggleLive2DWindow()
 
-    const chatResult = this.registerShortcutWithFallback(chatHotkey, 'CommandOrControl+Shift+A', chatHandler)
     const live2dResult = this.registerShortcutWithFallback(
       live2dHotkey,
       'CommandOrControl+Shift+L',
@@ -472,11 +467,11 @@ class Application {
     )
 
     const applied = {
-      toggleChat: chatResult.applied || 'CommandOrControl+Shift+A',
+      toggleChat: chatHotkey || 'CommandOrControl+Shift+A',
       toggleLive2D: live2dResult.applied || 'CommandOrControl+Shift+L',
       toggleLive2DControls: controlsResult.applied || 'CommandOrControl+Shift+H',
     }
-    return { applied, warnings: [...chatResult.warnings, ...live2dResult.warnings, ...controlsResult.warnings] }
+    return { applied, warnings: [...live2dResult.warnings, ...controlsResult.warnings] }
   }
 
   private toggleChatWindow() {

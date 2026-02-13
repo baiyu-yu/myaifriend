@@ -25,7 +25,7 @@
             {{ item.title }}
           </option>
         </select>
-        <button type="button" @click="switchConversationByButton">切换上下文</button>
+        <button type="button" class="create-context-btn" @click="createConversation">+</button>
         <button type="button" @click="clearConversation">清空上下文</button>
       </div>
       <div class="dialog-input">
@@ -113,19 +113,23 @@ const dialogDockPosition = ref({
   x: window.innerWidth / 2,
   y: Math.max(12, window.innerHeight - 130),
 })
+const dialogDockWidth = ref<number | null>(null)
 const replyBubblePosition = ref({
   x: window.innerWidth / 2,
   y: Math.max(8, window.innerHeight - 240),
 })
+const replyBubbleMaxWidth = ref<number | null>(null)
 const dialogDockStyle = computed(() => ({
   left: `${dialogDockPosition.value.x}px`,
   top: `${dialogDockPosition.value.y}px`,
   transform: 'translateX(-50%)',
+  width: dialogDockWidth.value ? `${dialogDockWidth.value}px` : undefined,
 }))
 const replyBubbleStyle = computed(() => ({
   left: `${replyBubblePosition.value.x}px`,
   top: `${replyBubblePosition.value.y}px`,
   transform: 'translateX(-50%)',
+  maxWidth: replyBubbleMaxWidth.value ? `${replyBubbleMaxWidth.value}px` : undefined,
 }))
 
 const configStore = useConfigStore()
@@ -1189,7 +1193,7 @@ function updateMousePassthroughByPointer(event: MouseEvent) {
 
 function typewriteReply(text: string) {
   if (replyTypeTimer) {
-    clearInterval(replyTypeTimer)
+    clearTimeout(replyTypeTimer)
     replyTypeTimer = null
   }
   const content = String(text || '')
@@ -1199,26 +1203,33 @@ function typewriteReply(text: string) {
   }
   let cursor = 0
   replyText.value = ''
-  const step = Math.max(1, Math.ceil(content.length / 90))
-  replyTypeTimer = setInterval(() => {
+  const punctuationPattern = /[，。！？!?；;：:,、]/u
+  const tick = () => {
+    const remaining = content.length - cursor
+    const step = remaining > 140 ? 4 : remaining > 48 ? 2 : 1
     cursor = Math.min(content.length, cursor + step)
     replyText.value = content.slice(0, cursor)
     syncDialogAndReplyPosition('typewrite')
-    if (cursor >= content.length && replyTypeTimer) {
-      clearInterval(replyTypeTimer)
+    if (cursor >= content.length) {
       replyTypeTimer = null
+      return
     }
-  }, 22)
+    const lastChar = replyText.value.slice(-1)
+    const delay = punctuationPattern.test(lastChar) ? 68 : 18
+    replyTypeTimer = setTimeout(tick, delay)
+  }
+  replyTypeTimer = setTimeout(tick, 16)
 }
 
 function showReply(text: string) {
   if (replyTimer) clearTimeout(replyTimer)
   typewriteReply(text)
   syncDialogAndReplyPosition('show-reply')
+  const keepMs = Math.max(9000, Math.min(24000, 5200 + Math.round(String(text || '').length * 72)))
   replyTimer = setTimeout(() => {
     replyText.value = ''
     syncDialogAndReplyPosition('hide-reply')
-  }, 10000)
+  }, keepMs)
 }
 
 function syncDialogAndReplyPosition(reason = 'manual') {
@@ -1229,20 +1240,24 @@ function syncDialogAndReplyPosition(reason = 'manual') {
   const viewportWidth = window.innerWidth
   const viewportHeight = window.innerHeight
   const defaultDockWidth = Math.min(viewportWidth * 0.92, 780)
-  const dockWidth = dialogDockRef.value?.offsetWidth || defaultDockWidth
-  const dockHeight = dialogDockRef.value?.offsetHeight || 94
+  const estimatedDockHeight = dialogDockRef.value?.offsetHeight || 94
 
+  let targetDockWidth = defaultDockWidth
   let centerX = viewportWidth / 2
-  let dockTop = Math.max(12, viewportHeight - dockHeight - 12)
+  let dockTop = Math.max(12, viewportHeight - estimatedDockHeight - 12)
   if (currentModel) {
     try {
       const bounds = currentModel.getBounds()
       centerX = bounds.x + bounds.width / 2
-      dockTop = bounds.y - dockHeight - 12
+      dockTop = bounds.y - estimatedDockHeight - 12
+      targetDockWidth = Math.min(Math.max(bounds.width * 1.08, 280), Math.min(viewportWidth * 0.94, 840))
     } catch {
       // ignore unstable bounds during model loading
     }
   }
+  dialogDockWidth.value = Math.round(targetDockWidth)
+  const dockWidth = dialogDockWidth.value || defaultDockWidth
+  const dockHeight = dialogDockRef.value?.offsetHeight || estimatedDockHeight
 
   const minDockX = dockWidth / 2 + 8
   const maxDockX = viewportWidth - dockWidth / 2 - 8
@@ -1253,7 +1268,9 @@ function syncDialogAndReplyPosition(reason = 'manual') {
     y: Math.round(clampedDockY),
   }
 
-  const bubbleWidth = replyBubbleRef.value?.offsetWidth || Math.min(viewportWidth * 0.9, 560)
+  const targetBubbleWidth = Math.min(Math.max(targetDockWidth * 0.9, 240), Math.min(viewportWidth * 0.9, 620))
+  replyBubbleMaxWidth.value = Math.round(targetBubbleWidth)
+  const bubbleWidth = replyBubbleRef.value?.offsetWidth || targetBubbleWidth
   const bubbleHeight = replyBubbleRef.value?.offsetHeight || 56
   const minBubbleX = bubbleWidth / 2 + 8
   const maxBubbleX = viewportWidth - bubbleWidth / 2 - 8
@@ -1281,14 +1298,9 @@ async function switchConversation() {
   await chatStore.loadConversation(chatStore.activeConversationId)
 }
 
-async function switchConversationByButton() {
-  if (chatStore.conversations.length === 0) return
-  const idx = chatStore.conversations.findIndex((item) => item.id === chatStore.activeConversationId)
-  const nextIdx = idx >= 0 ? (idx + 1) % chatStore.conversations.length : 0
-  const next = chatStore.conversations[nextIdx]
-  if (!next) return
-  chatStore.activeConversationId = next.id
-  await chatStore.loadConversation(next.id)
+async function createConversation() {
+  await chatStore.createConversation()
+  syncReplyFromLatestAssistant()
 }
 
 function syncReplyFromLatestAssistant() {
@@ -1732,8 +1744,8 @@ canvas {
   color: #303133;
   line-height: 1.5;
   box-shadow: 0 10px 20px rgba(15, 23, 42, 0.18);
-  max-height: 120px;
-  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow: visible;
   word-break: break-word;
 }
 
@@ -1775,6 +1787,12 @@ canvas {
   font-size: 12px;
   background: rgba(241, 245, 249, 0.96);
   cursor: pointer;
+}
+
+.dialog-actions .create-context-btn {
+  min-width: 30px;
+  padding: 6px 0;
+  font-weight: 700;
 }
 
 .dialog-input {

@@ -37,6 +37,22 @@
             <el-button type="primary" @click="saveModelAssignments">保存模型分配</el-button>
           </el-form-item>
         </el-form>
+
+        <el-divider content-position="left">模型请求体扩展（除 messages 字段）</el-divider>
+        <el-form label-width="180px" style="max-width: 860px">
+          <el-form-item label="自定义请求体 JSON">
+            <el-input
+              v-model="modelRequestBodyInput"
+              type="textarea"
+              :rows="8"
+              placeholder='例如：{"temperature":0.7,"top_p":0.9}'
+            />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="saveModelRequestBody">保存请求体扩展</el-button>
+            <el-button @click="resetModelRequestBody">重置为空对象</el-button>
+          </el-form-item>
+        </el-form>
       </el-tab-pane>
 
       <el-tab-pane label="角色设定" name="character">
@@ -284,9 +300,6 @@
 
       <el-tab-pane label="快捷键" name="hotkeys">
         <el-form label-width="180px" style="max-width: 520px">
-          <el-form-item label="显示/隐藏对话窗口">
-            <el-input v-model="configStore.config.hotkeys.toggleChat" />
-          </el-form-item>
           <el-form-item label="显示/隐藏 Live2D">
             <el-input v-model="configStore.config.hotkeys.toggleLive2D" />
           </el-form-item>
@@ -944,6 +957,7 @@ let logRefreshTimer: ReturnType<typeof setInterval> | null = null
 const searchAllowDomainsInput = ref('')
 const searchBlockDomainsInput = ref('')
 const instinctMemoriesInput = ref('')
+const modelRequestBodyInput = ref('{}')
 
 const memoryGroups = computed<MemoryGroupRow[]>(() => {
   const groupMap = new Map<string, MemoryGroupRow>()
@@ -1003,12 +1017,47 @@ function syncMemoryLayerInputs() {
   instinctMemoriesInput.value = (configStore.config.memoryLayers.instinctMemories || []).join('\n')
 }
 
+function syncModelRequestBodyInput() {
+  const source = configStore.config.modelRequestBody
+  modelRequestBodyInput.value = JSON.stringify(source && typeof source === 'object' ? source : {}, null, 2)
+}
+
 async function saveWebSearchConfig() {
   await configStore.setConfig('webSearch', {
     allowDomains: parseDomainInput(searchAllowDomainsInput.value),
     blockDomains: parseDomainInput(searchBlockDomainsInput.value),
   })
   ElMessage.success('搜索规则已保存')
+}
+
+async function saveModelRequestBody() {
+  const raw = modelRequestBodyInput.value.trim()
+  let parsed: unknown = {}
+  if (raw) {
+    try {
+      parsed = JSON.parse(raw)
+    } catch (error) {
+      ElMessage.error(`请求体 JSON 解析失败：${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    ElMessage.warning('请求体扩展必须是 JSON 对象')
+    return
+  }
+  const next = { ...(parsed as Record<string, unknown>) }
+  if (Object.prototype.hasOwnProperty.call(next, 'messages')) {
+    delete next.messages
+  }
+  await configStore.setConfig('modelRequestBody', next)
+  syncModelRequestBodyInput()
+  ElMessage.success('模型请求体扩展已保存')
+}
+
+async function resetModelRequestBody() {
+  modelRequestBodyInput.value = '{}'
+  await configStore.setConfig('modelRequestBody', {})
+  ElMessage.success('模型请求体扩展已重置')
 }
 
 function formatTime(ts: number) {
@@ -1162,6 +1211,7 @@ onMounted(async () => {
   syncModelAssignmentsFromConfig()
   syncSearchConfigInputs()
   syncMemoryLayerInputs()
+  syncModelRequestBodyInput()
   await loadTools()
   await loadMemories()
   await loadStorageInfo()
@@ -1205,6 +1255,16 @@ watch(
       void refreshWatchFolderContents()
     }
   }
+)
+
+watch(
+  () => configStore.config.modelRequestBody,
+  () => {
+    if (activeTab.value === 'api') {
+      syncModelRequestBodyInput()
+    }
+  },
+  { deep: true }
 )
 
 onBeforeUnmount(() => {

@@ -26,9 +26,27 @@ export class Live2DControlTool implements ITool {
   }
 
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
-    const actionType = args.action_type as 'expression' | 'motion'
-    const actionName = args.action_name as string
-    const priority = (args.priority as number) || 2
+    const normalizedType = String(args.action_type || args.type || '')
+      .trim()
+      .toLowerCase()
+    if (normalizedType !== 'expression' && normalizedType !== 'motion') {
+      return {
+        toolCallId: '',
+        content: '参数 action_type 无效，可选值: expression | motion',
+        isError: true,
+      }
+    }
+    const actionType = normalizedType as 'expression' | 'motion'
+    const actionName = String(args.action_name || args.name || '').trim()
+    if (!actionName) {
+      return {
+        toolCallId: '',
+        content: '参数 action_name 不能为空',
+        isError: true,
+      }
+    }
+    const rawPriority = Number(args.priority)
+    const priority = Number.isFinite(rawPriority) ? Math.max(1, Math.min(3, Math.round(rawPriority))) : 2
 
     const action: Live2DAction = {
       type: actionType,
@@ -36,14 +54,26 @@ export class Live2DControlTool implements ITool {
       priority,
     }
 
-    const windows = BrowserWindow.getAllWindows()
-    for (const win of windows) {
+    const windows = BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed())
+    const live2dWindows = windows.filter((win) => {
+      const url = win.webContents.getURL() || ''
+      return url.includes('#/live2d')
+    })
+    if (live2dWindows.length === 0) {
+      return {
+        toolCallId: '',
+        content: '未找到可用的 Live2D 窗口，请先显示 Live2D。',
+        isError: true,
+      }
+    }
+
+    for (const win of live2dWindows) {
       win.webContents.send(IPC_CHANNELS.LIVE2D_ACTION, action)
     }
 
     return {
       toolCallId: '',
-      content: `已发送 Live2D 动作: ${actionType} - ${actionName}`,
+      content: `已发送 Live2D 动作: ${actionType} - ${actionName}（目标窗口 ${live2dWindows.length} 个）`,
     }
   }
 }

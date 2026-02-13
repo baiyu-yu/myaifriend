@@ -24,6 +24,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     toggleLive2D: 'CommandOrControl+Shift+L',
     toggleLive2DControls: 'CommandOrControl+Shift+H',
   },
+  modelRequestBody: {},
   watchFolders: [],
   randomTimerRange: { min: 30, max: 120 },
   triggerPrompts: {

@@ -161,6 +161,7 @@ export interface AppConfig {
     toggleLive2D: string
     toggleLive2DControls: string
   }
+  modelRequestBody: Record<string, unknown>
   watchFolders: string[]
   randomTimerRange: { min: number; max: number }
   triggerPrompts: Record<InvokeTrigger, string>

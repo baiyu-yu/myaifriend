@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { ConfigManager } from '../config-manager'
-import { ApiConfig, ChatMessage, InvokeContext, TaskType, ToolDefinition, ToolResult } from '../../common/types'
+import { ApiConfig, ChatMessage, InvokeContext, TaskType, ToolDefinition, ToolParameter, ToolResult } from '../../common/types'
 import { MemoryManager } from './memory-manager'
 
 interface ChatCompletionMessage {
@@ -26,6 +26,7 @@ interface ChatCompletionRequest {
       parameters: Record<string, unknown>
     }
   }>
+  [key: string]: unknown
 }
 
 interface ChatCompletionResponse {
@@ -106,6 +107,10 @@ function pickMemoryCandidates(text: string): string[] {
   return lines.filter((line) =>
     /(记住|我喜欢|我不喜欢|我习惯|我是|我叫|我的偏好|请记下|偏好)/.test(line)
   )
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 const PREMIER_DISPATCH_PROMPT = `你是任务编排器（总理模型），负责把一次请求拆分成可执行工作流。
@@ -190,7 +195,6 @@ export class AIEngine {
     )
 
     const assistantContent = finalResponse.choices?.[0]?.message?.content || ''
-    this.logWorkflow('最终回复', assistantContent || '空回复')
     this.rememberIfNeeded(prepared.messages, assistantContent)
     return finalResponse
   }
@@ -216,11 +220,26 @@ export class AIEngine {
       .join('\n\n')
   }
 
+  private stringifyToolParameter(param: ToolParameter, required: boolean): string {
+    const enumPart = Array.isArray(param.enum) && param.enum.length > 0 ? `, enum=${param.enum.join(' | ')}` : ''
+    const childProperties =
+      param.properties && Object.keys(param.properties).length > 0
+        ? `, properties={${Object.entries(param.properties)
+            .map(([key, value]) => `${key}:${value.type}`)
+            .join(', ')}}`
+        : ''
+    const itemsPart = param.items ? `, items=${param.items.type}` : ''
+    return `${required ? 'required' : 'optional'} ${param.type}: ${param.description}${enumPart}${itemsPart}${childProperties}`
+  }
+
   private serializeTools(tools: ToolDefinition[]): string {
     return tools
       .map((tool) => {
-        const params = Object.keys(tool.parameters || {})
-        return `- ${tool.name}: ${tool.description} | params=${params.join(', ') || 'none'}`
+        const required = new Set(tool.required || [])
+        const params = Object.entries(tool.parameters || {})
+          .map(([name, param]) => `${name}(${this.stringifyToolParameter(param, required.has(name))})`)
+          .join(' ; ')
+        return `- ${tool.name}: ${tool.description} | 参数详情: ${params || '无参数'}`
       })
       .join('\n')
   }
@@ -553,11 +572,9 @@ export class AIEngine {
         `model=${modelName}`,
         `plan=${JSON.stringify(plan, null, 2)}`,
         `stepSummary=\n${summary || '无'}`,
-        `finalMessages=\n${this.serializeMessages(finalMessages)}`,
       ].join('\n\n')
     )
     const response = await this.requestChatCompletion(apiConfig, this.buildRequestBody(modelName, finalMessages, []))
-    this.logWorkflow('最终汇总响应', response.choices?.[0]?.message?.content || '空响应')
     response.meta = {
       model: modelName,
       taskType: 'premier',
@@ -590,12 +607,7 @@ export class AIEngine {
             .map((item, idx) => `${idx + 1}. ${item.text}`)
             .join('\n')
         : ''
-    const toolSummary = tools
-      .map((tool) => {
-        const args = Object.keys(tool.parameters || {}).join(', ') || '无参数'
-        return `- ${tool.name}: ${tool.description} | 参数: ${args}`
-      })
-      .join('\n')
+    const toolSummary = this.serializeTools(tools)
     const fileSummary = await this.buildWatchFilesSnapshot(allConfig.watchFolders || [])
     const triggerSummary = invokeContext
       ? invokeContext.trigger === 'file_change' && invokeContext.fileChangeInfo
@@ -814,8 +826,16 @@ export class AIEngine {
     }
   }
 
+  private resolveCustomRequestBody(): Record<string, unknown> {
+    const raw = this.configManager.getAll().modelRequestBody
+    if (!isPlainObject(raw)) return {}
+    const next = { ...raw }
+    delete next.messages
+    return next
+  }
+
   private buildRequestBody(modelName: string, messages: ChatMessage[], tools?: ToolDefinition[]): ChatCompletionRequest {
-    return {
+    const baseBody: ChatCompletionRequest = {
       model: modelName,
       messages: messages.map((m) => ({
         role: m.role,
@@ -848,12 +868,18 @@ export class AIEngine {
           }
         : {}),
     }
+    const customBody = this.resolveCustomRequestBody()
+    return {
+      ...customBody,
+      ...baseBody,
+    }
   }
 
   private async requestChatCompletion(
     apiConfig: ApiConfig,
     requestBody: ChatCompletionRequest
   ): Promise<ChatCompletionResponse> {
+    this.logWorkflow('模型请求体(JSON)', JSON.stringify(requestBody, null, 2))
     const response = await fetch(`${apiConfig.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -869,7 +895,9 @@ export class AIEngine {
       throw new Error(`API 请求失败（${response.status}）：${errorText}`)
     }
 
-    return response.json() as Promise<ChatCompletionResponse>
+    const parsed = (await response.json()) as ChatCompletionResponse
+    this.logWorkflow('模型响应体(JSON)', JSON.stringify(parsed, null, 2))
+    return parsed
   }
 
   private resolveModelRoute(
