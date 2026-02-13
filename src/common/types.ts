@@ -174,6 +174,11 @@ export interface AppConfig {
     idleSwaySpeed: number
     enableEyeTracking: boolean
   }
+  live2dControls: {
+    visible: boolean
+    x: number
+    y: number
+  }
   webSearch: {
     allowDomains: string[]
     blockDomains: string[]
@@ -244,6 +249,7 @@ export const IPC_CHANNELS = {
   LIVE2D_LOAD_MODEL: 'live2d:loadModel',
   LIVE2D_SHOW_REPLY: 'live2d:showReply',
   LIVE2D_BEHAVIOR_UPDATE: 'live2d:behaviorUpdate',
+  LIVE2D_CONTROLS_UPDATE: 'live2d:controlsUpdate',
 
   // Window
   WINDOW_TOGGLE_CHAT: 'window:toggleChat',

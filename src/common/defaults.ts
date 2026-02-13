@@ -45,6 +45,11 @@ export const DEFAULT_CONFIG: AppConfig = {
     idleSwaySpeed: 0.8,
     enableEyeTracking: false,
   },
+  live2dControls: {
+    visible: true,
+    x: 16,
+    y: 40,
+  },
   webSearch: {
     allowDomains: [],
     blockDomains: [],

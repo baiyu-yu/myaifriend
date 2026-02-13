@@ -383,6 +383,9 @@ class Application {
       this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_BEHAVIOR_UPDATE, {
         ...config.live2dBehavior,
       })
+      this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_CONTROLS_UPDATE, {
+        ...config.live2dControls,
+      })
       if (modelPath) {
         this.addRuntimeLog('info', `Live2D 窗口初始化下发模型: ${modelPath}`, 'live2d')
         this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
@@ -856,16 +859,28 @@ class Application {
           const hotkeys = Array.isArray(parsed?.Hotkeys) ? parsed.Hotkeys : []
           for (const item of hotkeys) {
             const actionType = String(item?.Action || item?.action || '').trim().toLowerCase()
-            const name = String(item?.Name || item?.name || '').trim() || pickNameFromFile(item?.File || item?.file)
-            if (!name) continue
+            const alias = String(item?.Name || item?.name || '').trim()
+            const target = pickNameFromFile(item?.File || item?.file)
+            const name = alias || target
+            if (!name && !target) continue
             if (actionType.includes('expression')) {
+              const mapped = target || name
               if (!expression[name]) {
-                expression[name] = name
+                expression[name] = mapped
+                fromCompanionExpression += 1
+              }
+              if (mapped && !expression[mapped]) {
+                expression[mapped] = mapped
                 fromCompanionExpression += 1
               }
             } else {
+              const mapped = target || name
               if (!motion[name]) {
-                motion[name] = name
+                motion[name] = mapped
+                fromCompanionMotion += 1
+              }
+              if (mapped && !motion[mapped]) {
+                motion[mapped] = mapped
                 fromCompanionMotion += 1
               }
             }
@@ -931,8 +946,16 @@ class Application {
         }
       }
 
-      const expressionSample = Object.keys(expression).slice(0, 5).join(', ') || '无'
-      const motionSample = Object.keys(motion).slice(0, 5).join(', ') || '无'
+      const expressionSample =
+        Object.entries(expression)
+          .slice(0, 5)
+          .map(([alias, target]) => `${alias}->${target}`)
+          .join(', ') || '无'
+      const motionSample =
+        Object.entries(motion)
+          .slice(0, 5)
+          .map(([alias, target]) => `${alias}->${target}`)
+          .join(', ') || '无'
       this.addRuntimeLog(
         'info',
         `Live2D 映射解析详情: model(exp:${fromModelExpression},motion:${fromModelMotion}) companion(exp:${fromCompanionExpression},motion:${fromCompanionMotion}) scan(exp:${fromScanExpression},motion:${fromScanMotion}) | exp示例: ${expressionSample} | motion示例: ${motionSample}`,
@@ -1036,6 +1059,12 @@ class Application {
         this.addRuntimeLog('info', '配置变更触发 Live2D 行为更新', 'live2d')
         this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_BEHAVIOR_UPDATE, {
           ...this.configManager.getAll().live2dBehavior,
+        })
+      }
+      if (key === 'live2dControls') {
+        this.addRuntimeLog('info', '配置变更触发 Live2D 功能按钮更新', 'live2d')
+        this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_CONTROLS_UPDATE, {
+          ...this.configManager.getAll().live2dControls,
         })
       }
       if (key === 'hotkeys') {

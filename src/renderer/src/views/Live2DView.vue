@@ -11,34 +11,63 @@
       <div class="reply-content">{{ replyText }}</div>
     </div>
 
-    <div class="control-toggle" @click.stop @mousedown.stop>
-      <button type="button" class="control-toggle-btn" @click="toggleControlPanel">
-        {{ showControlPanel ? '收起' : '动作' }}
-      </button>
+    <div
+      v-if="controlsState.visible"
+      class="control-widget"
+      :class="{ dragging: controlDragging }"
+      :style="controlWidgetStyle"
+      @click.stop
+      @mousedown.stop
+    >
+      <div class="control-toolbar" @mousedown.stop.prevent="startControlDrag">
+        <span class="control-drag-label">拖动</span>
+        <div class="control-toolbar-actions">
+          <button type="button" class="control-toggle-btn" @click.stop="toggleControlPanel">
+            {{ showControlPanel ? '收起' : '动作' }}
+          </button>
+          <button type="button" class="control-hide-btn" @click.stop="toggleControlButtonsVisible(false)">
+            隐藏
+          </button>
+        </div>
+      </div>
+
+      <div v-if="showControlPanel" class="control-panel">
+        <div class="control-row">
+          <select v-model="selectedExpression">
+            <option value="">选择表情</option>
+            <option v-for="item in expressionOptions" :key="`exp-${item}`" :value="item">{{ item }}</option>
+          </select>
+          <button type="button" @click="triggerExpressionManually">触发表情</button>
+        </div>
+        <div class="control-row">
+          <select v-model="selectedMotion">
+            <option value="">选择动作</option>
+            <option v-for="item in motionOptions" :key="`mot-${item}`" :value="item">{{ item }}</option>
+          </select>
+          <button type="button" @click="triggerMotionManually">触发动作</button>
+        </div>
+      </div>
     </div>
 
-    <div v-if="showControlPanel" class="control-panel" @click.stop @mousedown.stop>
-      <div class="control-row">
-        <select v-model="selectedExpression">
-          <option value="">选择表情</option>
-          <option v-for="item in expressionOptions" :key="`exp-${item}`" :value="item">{{ item }}</option>
-        </select>
-        <button type="button" @click="triggerExpressionManually">触发表情</button>
-      </div>
-      <div class="control-row">
-        <select v-model="selectedMotion">
-          <option value="">选择动作</option>
-          <option v-for="item in motionOptions" :key="`mot-${item}`" :value="item">{{ item }}</option>
-        </select>
-        <button type="button" @click="triggerMotionManually">触发动作</button>
-      </div>
+    <div
+      v-else
+      class="control-restore"
+      :class="{ dragging: controlDragging }"
+      :style="controlWidgetStyle"
+      @click.stop
+      @mousedown.stop
+    >
+      <span class="control-restore-drag" @mousedown.stop.prevent="startControlDrag">拖动</span>
+      <button type="button" class="control-show-btn" @click.stop="toggleControlButtonsVisible(true)">
+        显示按钮
+      </button>
     </div>
 
   </div>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as PIXI from 'pixi.js'
 import cubismCoreRuntimeUrl from 'live2dcubismcore/live2dcubismcore.min.js?url'
 import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4'
@@ -52,6 +81,16 @@ const selectedMotion = ref('')
 const expressionOptions = ref<string[]>([])
 const motionOptions = ref<string[]>([])
 const showControlPanel = ref(false)
+const controlsState = ref({
+  visible: true,
+  x: 16,
+  y: 40,
+})
+const controlDragging = ref(false)
+const controlWidgetStyle = computed(() => ({
+  left: `${controlsState.value.x}px`,
+  top: `${controlsState.value.y}px`,
+}))
 
 const configStore = useConfigStore()
 const cleanups: Array<() => void> = []
@@ -86,6 +125,9 @@ let modelDragging = false
 let modelDragMoved = false
 let modelDragOffsetX = 0
 let modelDragOffsetY = 0
+let controlDragOffsetX = 0
+let controlDragOffsetY = 0
+let controlSaveTimer: ReturnType<typeof setTimeout> | null = null
 let modelTransformCustomized = false
 let lastScaleLogAt = 0
 let lastInteractionState = ''
@@ -134,16 +176,76 @@ function applyBehavior(input: any, source: string) {
   }
 }
 
+function clampControlPosition(x: number, y: number): { x: number; y: number } {
+  const min = 8
+  const maxX = Math.max(min, window.innerWidth - 56)
+  const maxY = Math.max(min, window.innerHeight - 56)
+  return {
+    x: Math.min(maxX, Math.max(min, Math.round(x))),
+    y: Math.min(maxY, Math.max(min, Math.round(y))),
+  }
+}
+
+function sanitizeControls(input: any) {
+  const defaultX = Math.max(16, window.innerWidth - 140)
+  const x = Number(input?.x)
+  const y = Number(input?.y)
+  const next = clampControlPosition(Number.isFinite(x) ? x : defaultX, Number.isFinite(y) ? y : 40)
+  return {
+    visible: input?.visible !== false,
+    x: next.x,
+    y: next.y,
+  }
+}
+
+function applyControls(input: any, source: string) {
+  const next = sanitizeControls(input)
+  const prev = controlsState.value
+  controlsState.value = next
+  if (!next.visible) {
+    showControlPanel.value = false
+  }
+  if (prev.visible !== next.visible || prev.x !== next.x || prev.y !== next.y) {
+    logLive2D(
+      'info',
+      `Live2D 功能按钮参数已更新: source=${source}, visible=${next.visible}, x=${next.x}, y=${next.y}`
+    )
+  }
+}
+
+function queuePersistControls(reason: string) {
+  if (controlSaveTimer) {
+    clearTimeout(controlSaveTimer)
+  }
+  controlSaveTimer = setTimeout(() => {
+    controlSaveTimer = null
+    const payload = { ...controlsState.value }
+    void configStore
+      .setConfig('live2dControls', payload)
+      .then(() => {
+        logLive2D(
+          'info',
+          `Live2D 功能按钮位置已保存: reason=${reason}, visible=${payload.visible}, x=${payload.x}, y=${payload.y}`
+        )
+      })
+      .catch((error) => {
+        logLive2D('warn', `Live2D 功能按钮位置保存失败: reason=${reason} | ${describeError(error)}`)
+      })
+  }, 180)
+}
+
 function syncActionOptionsFromConfig() {
   const expMap = configStore.config.live2dActionMap?.expression || {}
   const motMap = configStore.config.live2dActionMap?.motion || {}
-  const exp = new Set<string>(Object.keys(expMap))
-  const mot = new Set<string>(Object.keys(motMap))
-  if (exp.size === 0) {
-    for (const value of Object.values(expMap)) exp.add(value)
+  const exp = new Set<string>()
+  const mot = new Set<string>()
+  for (const [alias, target] of Object.entries(expMap)) {
+    if (alias) exp.add(alias)
+    if (target) exp.add(target)
   }
-  if (mot.size === 0) {
-    for (const value of Object.values(motMap)) mot.add(value)
+  for (const [alias, target] of Object.entries(motMap)) {
+    if (alias) mot.add(alias)
+    if (target) mot.add(target)
   }
   expressionOptions.value = Array.from(exp).filter(Boolean)
   motionOptions.value = Array.from(mot).filter(Boolean)
@@ -442,13 +544,10 @@ async function loadModel(modelPath: string) {
     fitModelWithRetry(model)
     await playInitialMotion(model)
     const textureCount = Array.isArray((model as any).textures) ? (model as any).textures.length : 0
-    const motionGroupCount = Object.keys((model as any)?.internalModel?.motionManager?.definitions || {}).length
-    const expressionCount = Array.isArray((model as any)?.internalModel?.expressionManager?.definitions)
-      ? (model as any).internalModel.expressionManager.definitions.length
-      : 0
+    const actionSnapshot = collectModelActionDebugSnapshot()
     logLive2D(
       'info',
-      `Live2D 模型加载成功: ${modelPath} | texture=${textureCount}, motionGroup=${motionGroupCount}, expression=${expressionCount}`
+      `Live2D 模型加载成功: ${modelPath} | texture=${textureCount}, motionGroup=${actionSnapshot.motionGroupCount}, expression=${actionSnapshot.expressionDefinitionCount}, expMgr=${actionSnapshot.hasExpressionManager}, expSample=${actionSnapshot.expressionSample}, motSample=${actionSnapshot.motionSample}`
     )
   } catch (error) {
     const detail = describeError(error)
@@ -478,16 +577,63 @@ function resolveMappedActionName(action: Live2DAction): string {
   for (const [alias, target] of Object.entries(map)) {
     if (alias.toLowerCase() === lowered) return target
   }
-  for (const [alias, target] of Object.entries(map)) {
-    if (target === input || target.toLowerCase() === lowered) return alias
-  }
   return input
+}
+
+function getExpressionDefinitions(): any[] {
+  if (!currentModel) return []
+  const viaMotionManager = (currentModel as any)?.internalModel?.motionManager?.expressionManager?.definitions
+  if (Array.isArray(viaMotionManager)) return viaMotionManager
+  const viaInternal = (currentModel as any)?.internalModel?.expressionManager?.definitions
+  if (Array.isArray(viaInternal)) return viaInternal
+  const viaSettings = (currentModel as any)?.internalModel?.settings?.expressions
+  return Array.isArray(viaSettings) ? viaSettings : []
+}
+
+function getMotionDefinitions(): Record<string, any[]> {
+  if (!currentModel) return {}
+  const viaManager = (currentModel as any)?.internalModel?.motionManager?.definitions
+  if (viaManager && typeof viaManager === 'object') {
+    return viaManager
+  }
+  const viaSettings = (currentModel as any)?.internalModel?.settings?.motions
+  if (viaSettings && typeof viaSettings === 'object') {
+    return viaSettings
+  }
+  return {}
+}
+
+function collectModelActionDebugSnapshot() {
+  const expressionDefs = getExpressionDefinitions()
+  const motionDefs = getMotionDefinitions()
+  const expressionManager = (currentModel as any)?.internalModel?.motionManager?.expressionManager
+  return {
+    expressionDefinitionCount: expressionDefs.length,
+    motionGroupCount: Object.keys(motionDefs).length,
+    hasExpressionManager: Boolean(expressionManager),
+    expressionSample: expressionDefs
+      .slice(0, 5)
+      .map((item: any) =>
+        String(
+          typeof item === 'string'
+            ? item
+            : item?.Name || item?.name || item?.File || item?.file || ''
+        ).trim()
+      )
+      .filter(Boolean)
+      .join(', ') || '无',
+    motionSample:
+      Object.entries(motionDefs)
+        .slice(0, 4)
+        .map(([group, list]) => `${group}:${Array.isArray(list) ? list.length : 0}`)
+        .join(', ') || '无',
+  }
 }
 
 function collectAvailableActionNames(type: 'expression' | 'motion'): string[] {
   if (!currentModel) return []
   if (type === 'motion') {
-    const defs = (currentModel as any)?.internalModel?.motionManager?.definitions || {}
+    const defs = getMotionDefinitions()
     const names = new Set<string>()
     for (const [groupName, items] of Object.entries(defs)) {
       const group = String(groupName || '').trim()
@@ -504,8 +650,8 @@ function collectAvailableActionNames(type: 'expression' | 'motion'): string[] {
     return Array.from(names)
   }
 
-  const defs = (currentModel as any)?.internalModel?.expressionManager?.definitions
-  if (!Array.isArray(defs)) return []
+  const defs = getExpressionDefinitions()
+  if (defs.length === 0) return []
   const names = new Set<string>()
   for (const item of defs) {
     const raw =
@@ -521,8 +667,8 @@ function collectAvailableActionNames(type: 'expression' | 'motion'): string[] {
 
 function findExpressionIndexByName(name: string): number {
   if (!currentModel) return -1
-  const defs = (currentModel as any)?.internalModel?.expressionManager?.definitions
-  if (!Array.isArray(defs)) return -1
+  const defs = getExpressionDefinitions()
+  if (defs.length === 0) return -1
   const normalized = normalizeActionToken(name)
   if (!normalized) return -1
 
@@ -544,7 +690,7 @@ function findExpressionIndexByName(name: string): number {
 
 function resolveMotionFallback(name: string): { group: string; index?: number } | null {
   if (!currentModel) return null
-  const defs = (currentModel as any)?.internalModel?.motionManager?.definitions || {}
+  const defs = getMotionDefinitions()
   const entries = Object.entries(defs) as Array<[string, any[]]>
   if (entries.length === 0) return null
 
@@ -608,14 +754,11 @@ async function performAction(action: Live2DAction): Promise<{ ok: boolean; resol
   const mapped = resolveMappedActionName(action).trim()
   const original = action.name.trim()
   const available = collectAvailableActionNames(action.type)
-  const expressionDefCount = Array.isArray((currentModel as any)?.internalModel?.expressionManager?.definitions)
-    ? (currentModel as any).internalModel.expressionManager.definitions.length
-    : 0
-  const motionGroupCount = Object.keys((currentModel as any)?.internalModel?.motionManager?.definitions || {}).length
+  const modelSnapshot = collectModelActionDebugSnapshot()
   if (available.length === 0) {
     logLive2D(
       'warn',
-      `Live2D 动作可用列表为空: type=${action.type}, input=${action.name}, mapped=${mapped || '空'}, modelDefs(expression=${expressionDefCount},motionGroup=${motionGroupCount})`
+      `Live2D 动作可用列表为空: type=${action.type}, input=${action.name}, mapped=${mapped || '空'}, modelDefs(expression=${modelSnapshot.expressionDefinitionCount},motionGroup=${modelSnapshot.motionGroupCount},expMgr=${modelSnapshot.hasExpressionManager}), expSample=${modelSnapshot.expressionSample}, motSample=${modelSnapshot.motionSample}`
     )
   }
   const primary = findBestAvailableName([mapped, original], available)
@@ -673,9 +816,14 @@ async function performAction(action: Live2DAction): Promise<{ ok: boolean; resol
   }
 
   const availableSample = available.slice(0, 8).join(', ') || '无'
+  const mapSample =
+    Object.entries(resolveActionMap(action.type))
+      .slice(0, 6)
+      .map(([alias, target]) => `${alias}->${target}`)
+      .join(', ') || '无'
   logLive2D(
     'warn',
-    `Live2D 动作执行失败: type=${action.type}, input=${action.name}, mapped=${mapped || '空'}, available=${availableSample}, errors=${errors.slice(0, 2).join(' | ') || '无'}`
+    `Live2D 动作执行失败: type=${action.type}, input=${action.name}, mapped=${mapped || '空'}, candidates=${candidates.join(', ') || '无'}, available=${availableSample}, mapSample=${mapSample}, errors=${errors.slice(0, 2).join(' | ') || '无'}`
   )
   return { ok: false, resolvedName: mapped || original }
 }
@@ -707,7 +855,7 @@ function isPointInsideModel(clientX: number, clientY: number): boolean {
 
 function isPointerOnInteractiveElement(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false
-  return Boolean(target.closest('.control-panel, .control-toggle, .reply-bubble'))
+  return Boolean(target.closest('.control-widget, .control-panel, .control-restore, .reply-bubble'))
 }
 
 function clampModelWithinViewport() {
@@ -739,7 +887,7 @@ function clampModelWithinViewport() {
 }
 
 function updateMousePassthrough(clientX: number, clientY: number, target: EventTarget | null) {
-  if (modelDragging) {
+  if (modelDragging || controlDragging.value) {
     setMousePassthrough(false)
     return
   }
@@ -761,6 +909,45 @@ function showReply(text: string) {
   }, 10000)
 }
 
+function setControlPosition(x: number, y: number) {
+  const next = clampControlPosition(x, y)
+  controlsState.value = {
+    ...controlsState.value,
+    x: next.x,
+    y: next.y,
+  }
+}
+
+function startControlDrag(event: MouseEvent) {
+  if (event.button !== 0) return
+  const next = clampControlPosition(controlsState.value.x, controlsState.value.y)
+  controlsState.value = {
+    ...controlsState.value,
+    x: next.x,
+    y: next.y,
+  }
+  controlDragging.value = true
+  controlDragOffsetX = event.clientX - controlsState.value.x
+  controlDragOffsetY = event.clientY - controlsState.value.y
+  setMousePassthrough(false)
+}
+
+function toggleControlButtonsVisible(visible: boolean) {
+  if (controlsState.value.visible === visible) return
+  controlsState.value = {
+    ...controlsState.value,
+    visible,
+  }
+  if (!visible) {
+    showControlPanel.value = false
+  }
+  logLive2D('info', `Live2D 功能按钮可见性已切换: visible=${visible}`)
+  if (lastPointerX > 0 || lastPointerY > 0) {
+    updateMousePassthrough(lastPointerX, lastPointerY, null)
+  }
+  queuePersistControls('toggle-visible')
+}
+
 function handleResize() {
   if (!pixiApp) return
   pixiApp.renderer.resize(window.innerWidth, window.innerHeight)
@@ -773,12 +960,22 @@ function handleResize() {
   }
   focusTargetX = window.innerWidth / 2
   focusTargetY = window.innerHeight * 0.45
+  setControlPosition(controlsState.value.x, controlsState.value.y)
   if (lastPointerX > 0 || lastPointerY > 0) {
     updateMousePassthrough(lastPointerX, lastPointerY, null)
   }
 }
 
 function handleMouseMove(event: MouseEvent) {
+  if (controlDragging.value && event.buttons === 0) {
+    controlDragging.value = false
+    queuePersistControls('drag-release')
+  }
+  if (controlDragging.value) {
+    setControlPosition(event.clientX - controlDragOffsetX, event.clientY - controlDragOffsetY)
+    updateMousePassthroughByPointer(event)
+    return
+  }
   const rect = canvasRef.value?.getBoundingClientRect()
   if (!rect) return
   if (modelDragging && event.buttons === 0) {
@@ -811,7 +1008,7 @@ function handleMouseLeave() {
   trackingMouseInside = false
   focusTargetX = window.innerWidth / 2
   focusTargetY = window.innerHeight * 0.45
-  if (modelDragging) return
+  if (modelDragging || controlDragging.value) return
   setMousePassthrough(true)
 }
 
@@ -828,6 +1025,10 @@ function handleClick(event: MouseEvent) {
 }
 
 function handleMouseUp(event: MouseEvent) {
+  if (controlDragging.value) {
+    controlDragging.value = false
+    queuePersistControls('drag-end')
+  }
   if (modelDragging) {
     modelDragging = false
   }
@@ -867,6 +1068,13 @@ function handleModelWheel(event: WheelEvent) {
 }
 
 function toggleControlPanel() {
+  if (!controlsState.value.visible) {
+    controlsState.value = {
+      ...controlsState.value,
+      visible: true,
+    }
+    queuePersistControls('auto-show-panel')
+  }
   showControlPanel.value = !showControlPanel.value
 }
 
@@ -875,9 +1083,14 @@ async function triggerExpressionManually() {
   if (!name) return
   const mapped = resolveMappedActionName({ type: 'expression', name }).trim()
   const available = collectAvailableActionNames('expression')
+  const mapSample =
+    Object.entries(resolveActionMap('expression'))
+      .slice(0, 6)
+      .map(([alias, target]) => `${alias}->${target}`)
+      .join(', ') || '无'
   logLive2D(
     'info',
-    `Live2D 手动触发表情请求: input=${name}, mapped=${mapped || '空'}, available=${available.length}, sample=${available.slice(0, 8).join(', ') || '无'}`
+    `Live2D 手动触发表情请求: input=${name}, mapped=${mapped || '空'}, options=${expressionOptions.value.length}, available=${available.length}, sample=${available.slice(0, 8).join(', ') || '无'}, mapSample=${mapSample}`
   )
   const result = await performAction({ type: 'expression', name })
   if (result.ok) {
@@ -892,9 +1105,14 @@ async function triggerMotionManually() {
   if (!name) return
   const mapped = resolveMappedActionName({ type: 'motion', name }).trim()
   const available = collectAvailableActionNames('motion')
+  const mapSample =
+    Object.entries(resolveActionMap('motion'))
+      .slice(0, 6)
+      .map(([alias, target]) => `${alias}->${target}`)
+      .join(', ') || '无'
   logLive2D(
     'info',
-    `Live2D 手动触发动作请求: input=${name}, mapped=${mapped || '空'}, available=${available.length}, sample=${available.slice(0, 8).join(', ') || '无'}`
+    `Live2D 手动触发动作请求: input=${name}, mapped=${mapped || '空'}, options=${motionOptions.value.length}, available=${available.length}, sample=${available.slice(0, 8).join(', ') || '无'}, mapSample=${mapSample}`
   )
   const result = await performAction({ type: 'motion', name, priority: 3 })
   if (result.ok) {
@@ -906,6 +1124,10 @@ async function triggerMotionManually() {
 
 function handleWindowBlur() {
   modelDragging = false
+  if (controlDragging.value) {
+    controlDragging.value = false
+    queuePersistControls('window-blur')
+  }
   setMousePassthrough(true)
 }
 
@@ -913,6 +1135,14 @@ watch(
   () => configStore.config.live2dActionMap,
   () => {
     syncActionOptionsFromConfig()
+  },
+  { deep: true }
+)
+
+watch(
+  () => configStore.config.live2dControls,
+  (value) => {
+    applyControls(value, 'config-watch')
   },
   { deep: true }
 )
@@ -936,6 +1166,7 @@ onMounted(async () => {
 
   await configStore.loadConfig()
   applyBehavior(configStore.config.live2dBehavior, 'initial-config')
+  applyControls(configStore.config.live2dControls, 'initial-config')
   syncActionOptionsFromConfig()
   await ensureLive2DRuntime()
   if (configStore.config.live2dModelPath) {
@@ -991,7 +1222,14 @@ onMounted(async () => {
   }) => {
     applyBehavior(behavior, 'ipc')
   })
-  cleanups.push(offAction, offLoadModel, offShowReply, offBehaviorUpdate)
+  const offControlsUpdate = window.electronAPI.live2d.onControlsUpdate((controls: {
+    visible: boolean
+    x: number
+    y: number
+  }) => {
+    applyControls(controls, 'ipc')
+  })
+  cleanups.push(offAction, offLoadModel, offShowReply, offBehaviorUpdate, offControlsUpdate)
 
   window.addEventListener('resize', handleResize)
   window.addEventListener('mousemove', handleMouseMove)
@@ -1024,8 +1262,10 @@ onBeforeUnmount(() => {
   }
 
   modelDragging = false
+  controlDragging.value = false
   setMousePassthrough(false)
 
+  if (controlSaveTimer) clearTimeout(controlSaveTimer)
   if (replyTimer) clearTimeout(replyTimer)
 })
 </script>
@@ -1072,12 +1312,40 @@ canvas {
   word-break: break-word;
 }
 
-.control-toggle {
+.control-widget {
   position: absolute;
-  right: 10px;
-  top: 40px;
   z-index: 940;
+  width: 236px;
   -webkit-app-region: no-drag;
+}
+
+.control-widget.dragging {
+  opacity: 0.92;
+}
+
+.control-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
+  cursor: move;
+  user-select: none;
+}
+
+.control-drag-label {
+  font-size: 12px;
+  color: #475569;
+}
+
+.control-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .control-toggle-btn {
@@ -1089,11 +1357,19 @@ canvas {
   cursor: pointer;
 }
 
+.control-hide-btn,
+.control-show-btn {
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+  background: rgba(241, 245, 249, 0.95);
+  color: #334155;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .control-panel {
-  position: absolute;
-  right: 10px;
-  top: 72px;
-  z-index: 940;
+  margin-top: 8px;
   min-width: 220px;
   display: flex;
   flex-direction: column;
@@ -1104,6 +1380,31 @@ canvas {
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.18);
   -webkit-app-region: no-drag;
+}
+
+.control-restore {
+  position: absolute;
+  z-index: 940;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
+  -webkit-app-region: no-drag;
+}
+
+.control-restore.dragging {
+  opacity: 0.92;
+}
+
+.control-restore-drag {
+  font-size: 12px;
+  color: #475569;
+  cursor: move;
+  user-select: none;
 }
 
 .control-row {

@@ -72,6 +72,24 @@ const electronAPI = {
       ipcRenderer.on(IPC_CHANNELS.LIVE2D_BEHAVIOR_UPDATE, listener)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.LIVE2D_BEHAVIOR_UPDATE, listener)
     },
+    onControlsUpdate: (
+      callback: (controls: {
+        visible: boolean
+        x: number
+        y: number
+      }) => void
+    ) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        controls: {
+          visible: boolean
+          x: number
+          y: number
+        }
+      ) => callback(controls)
+      ipcRenderer.on(IPC_CHANNELS.LIVE2D_CONTROLS_UPDATE, listener)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.LIVE2D_CONTROLS_UPDATE, listener)
+    },
     onAction: (callback: (action: Live2DAction) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, action: Live2DAction) => callback(action)
       ipcRenderer.on(IPC_CHANNELS.LIVE2D_ACTION, listener)
