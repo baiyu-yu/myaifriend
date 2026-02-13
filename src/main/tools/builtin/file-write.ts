@@ -4,6 +4,10 @@ import ExcelJS from 'exceljs'
 import { ITool } from '../tool-manager'
 import { AppConfig, ToolDefinition, ToolResult } from '../../../common/types'
 
+type ResolveTargetPathResult =
+  | { ok: true; path: string; watchFolder: string }
+  | { ok: false; reason: string }
+
 export class FileWriteTool implements ITool {
   private getConfig?: () => AppConfig
 
@@ -13,23 +17,28 @@ export class FileWriteTool implements ITool {
 
   definition: ToolDefinition = {
     name: 'file_write',
-    description: '将内容写入监听文件夹中的文件，支持 txt/html/xlsx。',
+    description: 'Write content to files under configured watch folders. Supports txt/html/xlsx.',
     parameters: {
       path: {
         type: 'string',
-        description: '目标文件路径（相对路径会基于 watch_folder 解析）',
+        description:
+          'Target file path. Relative paths are resolved under watch_folder. Absolute paths must stay inside a watch folder.',
       },
       content: {
         type: 'string',
         description:
-          '写入内容。对于 xlsx，使用 JSON 字符串，例如 [{"sheet":"Sheet1","data":[["A1","B1"],["A2","B2"]]}]',
+          'Content to write. For xlsx, pass JSON like [{"sheet":"Sheet1","data":[["A1","B1"],["A2","B2"]]}].',
       },
       watch_folder: {
         type: 'string',
-        description: '监听目录路径。配置多个监听目录时建议必填。',
+        description: 'Target watch folder. Required when multiple watch folders are configured unless path already implies one.',
       },
     },
     required: ['path', 'content'],
+  }
+
+  private normalizePathForCompare(input: string): string {
+    return path.normalize(path.resolve(input)).toLowerCase()
   }
 
   private isPathInside(rootPath: string, targetPath: string): boolean {
@@ -37,61 +46,154 @@ export class FileWriteTool implements ITool {
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
   }
 
-  private resolveTargetPath(args: Record<string, unknown>): { ok: true; path: string } | { ok: false; reason: string } {
+  private matchWatchFolderByName(watchFolders: string[], folderName: string): string[] {
+    const name = folderName.trim().toLowerCase()
+    if (!name) return []
+    return watchFolders.filter((folder) => path.basename(folder).toLowerCase() === name)
+  }
+
+  private pickWatchFolderFromInput(watchFolders: string[], selectedWatchFolder: string): ResolveTargetPathResult | null {
+    if (!selectedWatchFolder) return null
+
+    const normalizedSelected = this.normalizePathForCompare(selectedWatchFolder)
+    const exact = watchFolders.find((folder) => this.normalizePathForCompare(folder) === normalizedSelected)
+    if (exact) {
+      return {
+        ok: true,
+        path: '',
+        watchFolder: exact,
+      }
+    }
+
+    const byName = this.matchWatchFolderByName(watchFolders, selectedWatchFolder)
+    if (byName.length === 1) {
+      return {
+        ok: true,
+        path: '',
+        watchFolder: byName[0],
+      }
+    }
+
+    if (byName.length > 1) {
+      return {
+        ok: false,
+        reason: `watch_folder name is ambiguous: ${selectedWatchFolder}. Candidates: ${byName.join(' | ')}`,
+      }
+    }
+
+    return {
+      ok: false,
+      reason: `watch_folder is not configured: ${selectedWatchFolder}. Available: ${watchFolders.join(' | ')}`,
+    }
+  }
+
+  private inferWatchFolderFromRelativePath(rawPath: string, watchFolders: string[]): {
+    watchFolder: string | null
+    relativePath: string
+  } {
+    const normalized = rawPath.replace(/\\/g, '/').replace(/^\.\//, '')
+    const [head, ...rest] = normalized.split('/')
+    if (!head) {
+      return { watchFolder: null, relativePath: rawPath }
+    }
+
+    const byName = this.matchWatchFolderByName(watchFolders, head)
+    if (byName.length === 1) {
+      const nextRelativePath = rest.join('/')
+      return {
+        watchFolder: byName[0],
+        relativePath: nextRelativePath || path.basename(rawPath),
+      }
+    }
+
+    return { watchFolder: null, relativePath: rawPath }
+  }
+
+  private resolveTargetPath(args: Record<string, unknown>): ResolveTargetPathResult {
     const rawPath = String(args.path || '').trim()
     if (!rawPath) {
-      return { ok: false, reason: '参数 path 不能为空' }
+      return { ok: false, reason: 'path is required' }
     }
+
     const watchFolders = (this.getConfig?.().watchFolders || [])
       .map((item) => String(item || '').trim())
       .filter(Boolean)
+      .map((folder) => path.resolve(folder))
+
     if (watchFolders.length === 0) {
-      return { ok: false, reason: '未配置监听目录，file_write 仅允许写入监听目录内文件。' }
+      return {
+        ok: false,
+        reason: 'No watch folder configured. file_write only allows writing inside watch folders.',
+      }
     }
 
     const selectedWatchFolder = String(args.watch_folder || '').trim()
     let baseFolder = ''
+    let effectivePath = rawPath
+
     if (selectedWatchFolder) {
-      const normalizedSelected = path.resolve(selectedWatchFolder)
-      baseFolder =
-        watchFolders.find(
-          (folder) => path.normalize(path.resolve(folder)).toLowerCase() === path.normalize(normalizedSelected).toLowerCase()
-        ) || ''
-      if (!baseFolder) {
+      const picked = this.pickWatchFolderFromInput(watchFolders, selectedWatchFolder)
+      if (picked && !picked.ok) {
+        return picked
+      }
+      baseFolder = picked?.watchFolder || ''
+    }
+
+    if (path.isAbsolute(rawPath)) {
+      const resolvedPath = path.resolve(rawPath)
+      if (baseFolder) {
+        if (!this.isPathInside(baseFolder, resolvedPath)) {
+          return {
+            ok: false,
+            reason: `Target path is not inside selected watch_folder: ${baseFolder}`,
+          }
+        }
+        return { ok: true, path: resolvedPath, watchFolder: baseFolder }
+      }
+
+      const candidates = watchFolders.filter((folder) => this.isPathInside(folder, resolvedPath))
+      if (candidates.length === 0) {
         return {
           ok: false,
-          reason: `watch_folder 不在监听目录列表中，可选值: ${watchFolders.join(' | ')}`,
+          reason: `Target path is outside watch folders: ${resolvedPath}. Watch folders: ${watchFolders.join(' | ')}`,
         }
       }
-    } else if (!path.isAbsolute(rawPath) && watchFolders.length === 1) {
-      baseFolder = watchFolders[0]
+      const matchedFolder = candidates[0]
+      return { ok: true, path: resolvedPath, watchFolder: matchedFolder }
     }
 
-    if (!baseFolder && watchFolders.length > 1) {
-      return {
-        ok: false,
-        reason: `存在多个监听目录，请指定 watch_folder。可选值: ${watchFolders.join(' | ')}`,
+    if (!baseFolder) {
+      if (watchFolders.length === 1) {
+        baseFolder = watchFolders[0]
+      } else {
+        const inferred = this.inferWatchFolderFromRelativePath(rawPath, watchFolders)
+        if (inferred.watchFolder) {
+          baseFolder = inferred.watchFolder
+          effectivePath = inferred.relativePath
+        }
       }
     }
 
-    const resolvedPath = path.isAbsolute(rawPath)
-      ? path.resolve(rawPath)
-      : path.resolve(path.resolve(baseFolder || watchFolders[0]), rawPath)
-    const inWatchFolders = watchFolders.some((folder) => this.isPathInside(folder, resolvedPath))
-    if (!inWatchFolders) {
+    if (!baseFolder) {
       return {
         ok: false,
-        reason: `目标路径不在监听目录内: ${resolvedPath}，监听目录: ${watchFolders.join(' | ')}`,
-      }
-    }
-    if (baseFolder && !this.isPathInside(baseFolder, resolvedPath)) {
-      return {
-        ok: false,
-        reason: `目标路径不在指定 watch_folder 内: ${baseFolder}`,
+        reason: `Multiple watch folders configured. Please specify watch_folder. Available: ${watchFolders.join(' | ')}`,
       }
     }
 
-    return { ok: true, path: resolvedPath }
+    const resolvedPath = path.resolve(baseFolder, effectivePath)
+    if (!this.isPathInside(baseFolder, resolvedPath)) {
+      return {
+        ok: false,
+        reason: `Target path escapes selected watch_folder: ${baseFolder}`,
+      }
+    }
+
+    return {
+      ok: true,
+      path: resolvedPath,
+      watchFolder: baseFolder,
+    }
   }
 
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
@@ -103,6 +205,7 @@ export class FileWriteTool implements ITool {
         isError: true,
       }
     }
+
     const filePath = resolved.path
     const content = String(args.content ?? '')
     const ext = path.extname(filePath).toLowerCase()
@@ -120,9 +223,9 @@ export class FileWriteTool implements ITool {
         case '.xlsx': {
           const workbook = new ExcelJS.Workbook()
           const sheetData = JSON.parse(content) as Array<{ sheet: string; data: string[][] }>
-          for (const s of sheetData) {
-            const sheet = workbook.addWorksheet(s.sheet)
-            for (const row of s.data) {
+          for (const sheetItem of sheetData) {
+            const sheet = workbook.addWorksheet(sheetItem.sheet)
+            for (const row of sheetItem.data) {
               sheet.addRow(row)
             }
           }
@@ -133,18 +236,23 @@ export class FileWriteTool implements ITool {
         default:
           return {
             toolCallId: '',
-            content: `不支持写入此文件格式: ${ext}`,
+            content: `Unsupported file extension for file_write: ${ext}`,
             isError: true,
           }
       }
 
-      return { toolCallId: '', content: `文件写入成功: ${filePath}` }
+      const relativeToWatchFolder = path.relative(resolved.watchFolder, filePath)
+      return {
+        toolCallId: '',
+        content: `Write success: ${filePath} (watch_folder=${resolved.watchFolder}, relative=${relativeToWatchFolder})`,
+      }
     } catch (error) {
       return {
         toolCallId: '',
-        content: `写入文件失败: ${error instanceof Error ? error.message : String(error)}`,
+        content: `Write failed: ${error instanceof Error ? error.message : String(error)}`,
         isError: true,
       }
     }
   }
 }
+

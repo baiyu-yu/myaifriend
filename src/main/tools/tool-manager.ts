@@ -11,6 +11,7 @@ import { Live2DControlTool } from './builtin/live2d-control'
 import { WebSearchTool } from './builtin/web-search'
 import { MemorySearchTool } from './builtin/memory-search'
 import { ConversationSearchTool } from './builtin/conversation-search'
+import { VisionAnalyzeTool } from './builtin/vision-analyze'
 import { MemoryManager } from '../ai/memory-manager'
 import { ConversationManager } from '../conversation-manager'
 
@@ -94,14 +95,8 @@ export class ToolManager {
       if (cloned.parameters.action_name) {
         cloned.parameters.action_name = {
           ...cloned.parameters.action_name,
-          description: `${cloned.parameters.action_name.description}。当前映射 expression=${expressionOptions.length} 项，motion=${motionOptions.length} 项；优先从 enum 选择。`,
+          description: `${cloned.parameters.action_name.description} (expression=${expressionOptions.length}, motion=${motionOptions.length})`,
           ...(allActionOptions.length > 0 ? { enum: allActionOptions } : {}),
-        }
-      }
-      if (cloned.parameters.action_type) {
-        cloned.parameters.action_type = {
-          ...cloned.parameters.action_type,
-          description: `${cloned.parameters.action_type.description}。expression=表情，motion=动作。`,
         }
       }
       return cloned
@@ -109,17 +104,17 @@ export class ToolManager {
 
     if (cloned.name === 'file_write') {
       const watchFolders = (config.watchFolders || []).map((item) => String(item || '').trim()).filter(Boolean)
-      cloned.description = `将内容写入监听文件夹中的文件（当前监听目录 ${watchFolders.length} 个）。`
+      cloned.description = `Write content to files under watch folders (configured=${watchFolders.length}).`
       if (cloned.parameters.path) {
         cloned.parameters.path = {
           ...cloned.parameters.path,
           description:
-            '目标文件路径。支持相对路径（将写入 watch_folder 对应监听目录）；也支持绝对路径（必须位于某个监听目录内）。',
+            'Target file path. Relative paths resolve under watch_folder. Absolute paths must remain inside a watch folder.',
         }
       }
       cloned.parameters.watch_folder = {
         type: 'string',
-        description: '监听目录路径。配置多个监听目录时必须指定，并从 enum 中选择。',
+        description: 'Watch folder path. Required when multiple watch folders are configured.',
         ...(watchFolders.length > 0 ? { enum: watchFolders } : {}),
       }
       const required = new Set(cloned.required || [])
@@ -138,12 +133,30 @@ export class ToolManager {
         cloned.parameters.path = {
           ...cloned.parameters.path,
           description:
-            '目标 HTML 文件路径或 URL。对于本地文件，建议使用监听目录内相对路径，并在多监听目录时提供 watch_folder。',
+            'Target HTML file path or URL. For local files, prefer relative paths inside watch folders and provide watch_folder when needed.',
         }
       }
       cloned.parameters.watch_folder = {
         type: 'string',
-        description: '监听目录路径。配置多个监听目录时必须指定。',
+        description: 'Watch folder path. Required when multiple watch folders are configured.',
+        ...(watchFolders.length > 0 ? { enum: watchFolders } : {}),
+      }
+      const required = new Set(cloned.required || [])
+      if (watchFolders.length > 1) {
+        required.add('watch_folder')
+      } else {
+        required.delete('watch_folder')
+      }
+      cloned.required = Array.from(required)
+      return cloned
+    }
+
+    if (cloned.name === 'vision_analyze') {
+      const watchFolders = (config.watchFolders || []).map((item) => String(item || '').trim()).filter(Boolean)
+      cloned.description = `Analyze image with vision model assignment (watchFolders=${watchFolders.length}).`
+      cloned.parameters.watch_folder = {
+        type: 'string',
+        description: 'Watch folder path used to resolve image_path.',
         ...(watchFolders.length > 0 ? { enum: watchFolders } : {}),
       }
       const required = new Set(cloned.required || [])
@@ -169,6 +182,7 @@ export class ToolManager {
     this.register(new FileInfoTool())
     this.register(new OpenBrowserTool(this.getConfig))
     this.register(new Live2DControlTool())
+    this.register(new VisionAnalyzeTool(this.getConfig))
     this.register(new WebSearchTool(this.getConfig))
     if (options?.memoryManager) {
       this.register(new MemorySearchTool(options.memoryManager))
@@ -179,10 +193,10 @@ export class ToolManager {
   }
 
   /**
-   * 基础安全校验策略（未做沙箱）：
-   * 1. 仅允许 .js/.cjs/.mjs
-   * 2. 文件名需包含 .tool.
-   * 3. 文件大小上限 2MB
+   * Basic plugin safety policy (not a full sandbox):
+   * 1) only .js/.cjs/.mjs files
+   * 2) file name must include .tool.
+   * 3) file size <= 2MB
    */
   async discoverTools(pluginDir: string): Promise<{ loaded: number; errors: string[] }> {
     const errors: string[] = []
@@ -201,7 +215,7 @@ export class ToolManager {
         const fullPath = path.join(pluginDir, entry.name)
         const stat = await fs.stat(fullPath)
         if (stat.size > 2 * 1024 * 1024) {
-          errors.push(`${entry.name}: 文件过大，已拒绝加载（>2MB）`)
+          errors.push(`${entry.name}: file too large, rejected (>2MB)`)
           continue
         }
 
@@ -214,23 +228,23 @@ export class ToolManager {
             this.register(tool)
             loaded += 1
           } else {
-            errors.push(`${entry.name}: 导出内容不符合 ITool 规范`)
+            errors.push(`${entry.name}: exported object does not match ITool contract`)
           }
         } catch (error) {
           errors.push(`${entry.name}: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
     } catch (error) {
-      errors.push(`读取插件目录失败: ${error instanceof Error ? error.message : String(error)}`)
+      errors.push(`Failed to read plugin directory: ${error instanceof Error ? error.message : String(error)}`)
     }
 
     return { loaded, errors }
   }
 
   getToolDefinitions(): ToolDefinition[] {
-    return Array.from(this.tools.values()).map((t) => ({
-      ...this.withRuntimeToolHints(t.definition),
-      enabled: this.isToolEnabled(t.definition.name),
+    return Array.from(this.tools.values()).map((tool) => ({
+      ...this.withRuntimeToolHints(tool.definition),
+      enabled: this.isToolEnabled(tool.definition.name),
     }))
   }
 
@@ -239,14 +253,14 @@ export class ToolManager {
     if (!tool) {
       return {
         toolCallId: '',
-        content: `工具 "${name}" 不存在`,
+        content: `Tool "${name}" not found`,
         isError: true,
       }
     }
     if (!this.isToolEnabled(name)) {
       return {
         toolCallId: '',
-        content: `工具 "${name}" 已在设置中禁用`,
+        content: `Tool "${name}" is disabled by settings`,
         isError: true,
       }
     }
@@ -256,7 +270,7 @@ export class ToolManager {
     } catch (error) {
       return {
         toolCallId: '',
-        content: `工具执行失败: ${error instanceof Error ? error.message : String(error)}`,
+        content: `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`,
         isError: true,
       }
     }
@@ -266,3 +280,4 @@ export class ToolManager {
     return this.tools.size
   }
 }
+
