@@ -181,10 +181,14 @@
             <el-input-number v-model="configStore.config.live2dControls.y" :min="0" :max="10000" />
           </el-form-item>
           <el-form-item label="窗口模式">
-            <el-text type="info">Live2D 窗口为全屏透明覆盖层，功能按钮支持拖动定位；非模型/对话框/按钮区域自动点击穿透。</el-text>
+            <el-text type="info">
+              Live2D 窗口为全屏透明覆盖层，功能按钮支持拖动定位；“显示/隐藏 Live2D 功能与对话区”快捷键会统一隐藏功能按钮与底部输入区；非模型/对话框/按钮区域自动点击穿透。
+            </el-text>
           </el-form-item>
-          <el-form-item label="功能按钮快捷键">
-            <el-text type="info">按 <code>Ctrl+Shift+H</code>（macOS 为 <code>Command+Shift+H</code>）可快速隐藏/显示功能按钮。</el-text>
+          <el-form-item label="功能与对话区快捷键">
+            <el-text type="info">
+              当前为 <code>{{ configStore.config.hotkeys.toggleLive2DControls || 'CommandOrControl+Shift+H' }}</code>，用于统一隐藏/显示 Live2D 功能按钮与底部对话区。
+            </el-text>
           </el-form-item>
           <el-form-item>
             <el-button type="primary" @click="saveLive2DConfig">保存模型与行为设置</el-button>
@@ -286,7 +290,7 @@
           <el-form-item label="显示/隐藏 Live2D">
             <el-input v-model="configStore.config.hotkeys.toggleLive2D" />
           </el-form-item>
-          <el-form-item label="显示/隐藏 Live2D 功能按钮">
+          <el-form-item label="显示/隐藏 Live2D 功能与对话区">
             <el-input v-model="configStore.config.hotkeys.toggleLive2DControls" />
           </el-form-item>
           <el-form-item>

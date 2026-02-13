@@ -137,7 +137,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, invokeContext: InvokeContext = { trigger: 'text_input' }) {
     if (!content.trim() || isLoading.value) return
 
     const trimmed = content.trim()
@@ -171,7 +171,7 @@ export const useChatStore = defineStore('chat', () => {
       apiMessages.push(...messages.value)
 
       const api = await getElectronAPI()
-      const response = await api.chat.send(toPlain(apiMessages))
+      const response = await api.chat.send(toPlain(apiMessages), undefined, undefined, invokeContext)
       const choice = response.choices?.[0]
       const inference = response.meta
 
@@ -211,7 +211,7 @@ export const useChatStore = defineStore('chat', () => {
               : []),
             ...messages.value,
           ]
-          const followUp = await api.chat.send(toPlain(followUpMessages))
+          const followUp = await api.chat.send(toPlain(followUpMessages), undefined, undefined, invokeContext)
           const followUpChoice = followUp.choices?.[0]
           if (followUpChoice?.message?.content) {
             messages.value.push({
@@ -255,7 +255,7 @@ export const useChatStore = defineStore('chat', () => {
 
     if (prompt) {
       await addChatLog('info', `触发提示词已生成: ${prompt.slice(0, 120)}`)
-      await sendMessage(prompt)
+      await sendMessage(prompt, context)
       // If triggered by non-dialog means and Live2D has a model, show reply below avatar
       if (context.trigger !== 'text_input' && config.live2dModelPath) {
         const lastAssistant = [...messages.value].reverse().find((m) => m.role === 'assistant')

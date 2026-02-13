@@ -103,6 +103,7 @@ class Application {
   private dispatchTrigger(ctx: InvokeContext, source = 'trigger') {
     this.addRuntimeLog('info', `AI 触发请求: ${this.summarizeInvokeContext(ctx)}`, source)
     this.chatWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
+    this.live2dWindow?.webContents.send(IPC_CHANNELS.TRIGGER_INVOKE, ctx)
   }
 
   private toIPCData<T>(value: T): T {
@@ -161,7 +162,7 @@ class Application {
     this.configManager = new ConfigManager(storageDir)
     this.conversationManager = new ConversationManager(storageDir)
     this.toolManager = new ToolManager(() => this.configManager.getAll())
-    this.aiEngine = new AIEngine(this.configManager)
+    this.aiEngine = new AIEngine(this.configManager, (name, args) => this.toolManager.execute(name, args))
     this.memoryManager = new MemoryManager(storageDir)
     this.fileWatcher = new FileWatcher()
 
@@ -171,7 +172,6 @@ class Application {
     })
 
     this.createMainWindow()
-    this.createChatWindow()
     this.createLive2DWindow()
     this.createTray()
     this.registerGlobalShortcuts()
@@ -426,7 +426,7 @@ class Application {
 
     const contextMenu = Menu.buildFromTemplate([
       { label: '打开设置', click: () => this.openMainRoute('settings') },
-      { label: '显示/隐藏对话窗口', click: () => this.toggleChatWindow() },
+      { label: '显示/隐藏 AI 面板', click: () => this.toggleChatWindow() },
       { label: '显示/隐藏 Live2D', click: () => this.toggleLive2DWindow() },
       { type: 'separator' },
       { label: '退出程序', click: () => this.requestQuit() },
@@ -476,7 +476,10 @@ class Application {
   }
 
   private toggleChatWindow() {
-    if (!this.chatWindow) return
+    if (!this.chatWindow) {
+      this.toggleLive2DWindow()
+      return
+    }
     if (this.chatWindow.isVisible()) {
       this.chatWindow.hide()
     } else {
@@ -486,7 +489,10 @@ class Application {
   }
 
   private showChatWindow() {
-    if (!this.chatWindow) return
+    if (!this.chatWindow) {
+      this.showLive2DWindow()
+      return
+    }
     if (!this.chatWindow.isVisible()) {
       this.chatWindow.show()
     }
@@ -524,7 +530,11 @@ class Application {
     }
     this.configManager.set('live2dControls', next)
     this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_CONTROLS_UPDATE, next)
-    this.addRuntimeLog('info', `Live2D 功能按钮可见性切换: source=${source}, visible=${next.visible}`, 'live2d')
+    this.addRuntimeLog(
+      'info',
+      `Live2D 功能按钮与对话区可见性切换: source=${source}, visible=${next.visible}`,
+      'live2d'
+    )
     if (this.live2dWindow?.isVisible()) {
       this.enforceLive2DOnTop('toggle-controls')
     }
@@ -1148,9 +1158,9 @@ class Application {
     })
     ipcMain.handle(IPC_CHANNELS.CONFIG_GET_ALL, () => this.configManager.getAll())
 
-    ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_e, messages, apiConfigId, model) => {
+    ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_e, messages, apiConfigId, model, invokeContext?: InvokeContext) => {
       const tools = this.toolManager.getToolDefinitions().filter((tool) => tool.enabled !== false)
-      return this.toIPCData(await this.aiEngine.chat(messages, apiConfigId, model, 'premier', tools))
+      return this.toIPCData(await this.aiEngine.chat(messages, apiConfigId, model, 'premier', tools, invokeContext))
     })
     ipcMain.handle(IPC_CHANNELS.CHAT_ABORT, () => this.aiEngine.abort())
     ipcMain.handle(IPC_CHANNELS.CHAT_HISTORY_LIST, () => this.toIPCData(this.conversationManager.list()))

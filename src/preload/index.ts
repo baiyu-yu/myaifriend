@@ -10,8 +10,8 @@ const electronAPI = {
   },
 
   chat: {
-    send: (messages: unknown[], apiConfigId?: string, model?: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.CHAT_SEND, messages, apiConfigId, model),
+    send: (messages: unknown[], apiConfigId?: string, model?: string, invokeContext?: InvokeContext) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CHAT_SEND, messages, apiConfigId, model, invokeContext),
     onStream: (callback: (chunk: string) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, chunk: string) => callback(chunk)
       ipcRenderer.on(IPC_CHANNELS.CHAT_STREAM, listener)

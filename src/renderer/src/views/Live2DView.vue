@@ -11,6 +11,29 @@
       <div class="reply-content">{{ replyText }}</div>
     </div>
 
+    <div v-if="controlsState.visible" class="dialog-dock" @click.stop @mousedown.stop>
+      <div class="dialog-actions">
+        <select v-model="chatStore.activeConversationId" @change="switchConversation">
+          <option v-for="item in chatStore.conversations" :key="item.id" :value="item.id">
+            {{ item.title }}
+          </option>
+        </select>
+        <button type="button" @click="switchConversationByButton">切换上下文</button>
+        <button type="button" @click="clearConversation">清空上下文</button>
+      </div>
+      <div class="dialog-input">
+        <input
+          v-model="chatInput"
+          type="text"
+          placeholder="输入消息，按 Enter 发送"
+          @keydown.enter.prevent="sendChat"
+        />
+        <button type="button" :disabled="chatStore.isLoading || !chatInput.trim()" @click="sendChat">
+          {{ chatStore.isLoading ? '发送中' : '发送' }}
+        </button>
+      </div>
+    </div>
+
     <div
       v-if="controlsState.visible"
       class="control-widget"
@@ -47,25 +70,6 @@
         </div>
       </div>
     </div>
-
-    <div
-      v-else
-      class="control-restore"
-      :class="{ dragging: controlDragging }"
-      :style="controlWidgetStyle"
-      @click.stop
-      @mousedown.stop.prevent="startControlDrag"
-    >
-      <button
-        type="button"
-        class="control-show-btn"
-        @mousedown.stop
-        @click.stop="toggleControlButtonsVisible(true)"
-      >
-        显示按钮
-      </button>
-    </div>
-
   </div>
 </template>
 
@@ -74,13 +78,15 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as PIXI from 'pixi.js'
 import cubismCoreRuntimeUrl from 'live2dcubismcore/live2dcubismcore.min.js?url'
 import type { Live2DModel as Live2DModelType } from 'pixi-live2d-display/cubism4'
-import type { Live2DAction } from '../../../common/types'
+import type { InvokeContext, Live2DAction } from '../../../common/types'
 import { useConfigStore } from '../stores/config'
+import { useChatStore } from '../stores/chat'
 
 const canvasRef = ref<HTMLCanvasElement>()
 const replyText = ref('')
 const selectedExpression = ref('')
 const selectedMotion = ref('')
+const chatInput = ref('')
 const expressionOptions = ref<string[]>([])
 const motionOptions = ref<string[]>([])
 const showControlPanel = ref(false)
@@ -96,11 +102,14 @@ const controlWidgetStyle = computed(() => ({
 }))
 
 const configStore = useConfigStore()
+const chatStore = useChatStore()
 const cleanups: Array<() => void> = []
 
 let pixiApp: PIXI.Application | null = null
 let currentModel: Live2DModelType | null = null
 let replyTimer: ReturnType<typeof setTimeout> | null = null
+let replyTypeTimer: ReturnType<typeof setInterval> | null = null
+let lastTypedMessageKey = ''
 let idleTicker: ((delta: number) => void) | null = null
 let baseX = 0
 let baseY = 0
@@ -1102,7 +1111,7 @@ function isPointInsideModel(clientX: number, clientY: number): boolean {
 
 function isPointerOnInteractiveElement(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false
-  return Boolean(target.closest('.control-widget, .control-panel, .control-restore, .reply-bubble'))
+  return Boolean(target.closest('.control-widget, .control-panel, .reply-bubble, .dialog-dock'))
 }
 
 function clampModelWithinViewport() {
@@ -1148,12 +1157,72 @@ function updateMousePassthroughByPointer(event: MouseEvent) {
   updateMousePassthrough(event.clientX, event.clientY, event.target)
 }
 
+function typewriteReply(text: string) {
+  if (replyTypeTimer) {
+    clearInterval(replyTypeTimer)
+    replyTypeTimer = null
+  }
+  const content = String(text || '')
+  if (!content) {
+    replyText.value = ''
+    return
+  }
+  let cursor = 0
+  replyText.value = ''
+  const step = Math.max(1, Math.ceil(content.length / 90))
+  replyTypeTimer = setInterval(() => {
+    cursor = Math.min(content.length, cursor + step)
+    replyText.value = content.slice(0, cursor)
+    if (cursor >= content.length && replyTypeTimer) {
+      clearInterval(replyTypeTimer)
+      replyTypeTimer = null
+    }
+  }, 22)
+}
+
 function showReply(text: string) {
   if (replyTimer) clearTimeout(replyTimer)
-  replyText.value = text
+  typewriteReply(text)
   replyTimer = setTimeout(() => {
     replyText.value = ''
   }, 10000)
+}
+
+async function sendChat() {
+  const content = chatInput.value.trim()
+  if (!content || chatStore.isLoading) return
+  chatInput.value = ''
+  await chatStore.sendMessage(content, { trigger: 'text_input' })
+}
+
+async function clearConversation() {
+  await chatStore.clearMessages()
+}
+
+async function switchConversation() {
+  if (!chatStore.activeConversationId) return
+  await chatStore.loadConversation(chatStore.activeConversationId)
+}
+
+async function switchConversationByButton() {
+  if (chatStore.conversations.length === 0) return
+  const idx = chatStore.conversations.findIndex((item) => item.id === chatStore.activeConversationId)
+  const nextIdx = idx >= 0 ? (idx + 1) % chatStore.conversations.length : 0
+  const next = chatStore.conversations[nextIdx]
+  if (!next) return
+  chatStore.activeConversationId = next.id
+  await chatStore.loadConversation(next.id)
+}
+
+function syncReplyFromLatestAssistant() {
+  const lastAssistant = [...chatStore.messages]
+    .reverse()
+    .find((item) => item.role === 'assistant' && String(item.content || '').trim().length > 0)
+  if (!lastAssistant) return
+  const key = `${lastAssistant.id}:${lastAssistant.content.length}`
+  if (key === lastTypedMessageKey) return
+  lastTypedMessageKey = key
+  showReply(lastAssistant.content)
 }
 
 function setControlPosition(x: number, y: number) {
@@ -1188,7 +1257,7 @@ function toggleControlButtonsVisible(visible: boolean) {
   if (!visible) {
     showControlPanel.value = false
   }
-  logLive2D('info', `Live2D 功能按钮可见性已切换: visible=${visible}`)
+  logLive2D('info', `Live2D 功能按钮与对话区可见性已切换: visible=${visible}`)
   if (lastPointerX > 0 || lastPointerY > 0) {
     updateMousePassthrough(lastPointerX, lastPointerY, null)
   }
@@ -1401,6 +1470,20 @@ watch(
   { deep: true }
 )
 
+watch(
+  () => chatStore.messages.length,
+  () => {
+    syncReplyFromLatestAssistant()
+  }
+)
+
+watch(
+  () => chatStore.activeConversationId,
+  () => {
+    syncReplyFromLatestAssistant()
+  }
+)
+
 onMounted(async () => {
   if (!canvasRef.value) return
 
@@ -1419,9 +1502,11 @@ onMounted(async () => {
   patchRendererInteractionManager('after-pixi-init')
 
   await configStore.loadConfig()
+  await chatStore.initConversation()
   applyBehavior(configStore.config.live2dBehavior, 'initial-config')
   applyControls(configStore.config.live2dControls, 'initial-config')
   syncActionOptionsFromConfig()
+  syncReplyFromLatestAssistant()
   await ensureLive2DRuntime()
   if (configStore.config.live2dModelPath) {
     await loadModel(configStore.config.live2dModelPath)
@@ -1468,6 +1553,9 @@ onMounted(async () => {
   const offShowReply = window.electronAPI.live2d.onShowReply((text: string) => {
     showReply(text)
   })
+  const offTrigger = window.electronAPI.on.triggerInvoke((context: InvokeContext) => {
+    void chatStore.handleTrigger(context)
+  })
   const offBehaviorUpdate = window.electronAPI.live2d.onBehaviorUpdate((behavior: {
     enableIdleSway: boolean
     idleSwayAmplitude: number
@@ -1483,7 +1571,7 @@ onMounted(async () => {
   }) => {
     applyControls(controls, 'ipc')
   })
-  cleanups.push(offAction, offLoadModel, offShowReply, offBehaviorUpdate, offControlsUpdate)
+  cleanups.push(offAction, offLoadModel, offShowReply, offBehaviorUpdate, offControlsUpdate, offTrigger)
 
   window.addEventListener('resize', handleResize)
   window.addEventListener('mousemove', handleMouseMove)
@@ -1522,6 +1610,7 @@ onBeforeUnmount(() => {
   if (controlSaveTimer) clearTimeout(controlSaveTimer)
   if (modelTransformSaveTimer) clearTimeout(modelTransformSaveTimer)
   if (replyTimer) clearTimeout(replyTimer)
+  if (replyTypeTimer) clearInterval(replyTypeTimer)
 })
 </script>
 
@@ -1544,7 +1633,7 @@ canvas {
 
 .reply-bubble {
   position: absolute;
-  bottom: 8px;
+  bottom: 110px;
   left: 50%;
   transform: translateX(-50%);
   max-width: 90%;
@@ -1565,6 +1654,81 @@ canvas {
   max-height: 120px;
   overflow-y: auto;
   word-break: break-word;
+}
+
+.dialog-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  width: min(92vw, 780px);
+  z-index: 930;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.2);
+  -webkit-app-region: no-drag;
+}
+
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dialog-actions select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+  font-size: 12px;
+}
+
+.dialog-actions button {
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  background: rgba(241, 245, 249, 0.96);
+  cursor: pointer;
+}
+
+.dialog-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dialog-input input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.dialog-input button {
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  border-radius: 10px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  background: rgba(15, 118, 110, 0.12);
+  color: #0f766e;
+  cursor: pointer;
+}
+
+.dialog-input button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .control-widget {
