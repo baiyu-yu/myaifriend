@@ -78,3 +78,77 @@ test('ai engine uses premier model for dispatch', async () => {
     globalThis.fetch = originalFetch
   }
 })
+
+test('ai engine does not append /chat/completions twice when baseUrl already points to it', async () => {
+  const config = buildConfig({
+    apiConfigs: [
+      {
+        id: 'api-1',
+        name: 'local',
+        baseUrl: 'http://fake/chat/completions',
+        apiKey: 'k',
+        defaultModel: 'gpt-a',
+        availableModels: [],
+      },
+    ],
+    modelAssignments: {
+      ...DEFAULT_CONFIG.modelAssignments,
+      premier: { apiConfigId: 'api-1', model: 'gpt-premier' },
+      tool_calling: { apiConfigId: 'api-1', model: 'gpt-tool' },
+    },
+    agentChain: {
+      ...DEFAULT_CONFIG.agentChain,
+      enableMemory: false,
+      enableContextCompression: false,
+    },
+  })
+
+  const { AIEngine } = await import('../../src/main/ai/ai-engine')
+  const engine = new AIEngine({ getAll: () => config } as any)
+  const originalFetch = globalThis.fetch
+  const calledUrls: string[] = []
+
+  let fetchCount = 0
+  globalThis.fetch = (async (input: string) => {
+    calledUrls.push(String(input))
+    fetchCount += 1
+    if (fetchCount === 1) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content:
+                    '{"workflow_id":"wf_url","tasks":[{"task_id":"task_1","model_type":"tool","input_prompt":"reply directly","dependencies":[],"use_tools":false}],"final_intent":"reply"}',
+                },
+                finish_reason: 'stop',
+              },
+            ],
+          }),
+      }
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        }),
+    }
+  }) as any
+
+  try {
+    await engine.chat([{ id: 'u1', role: 'user', content: '你好', timestamp: Date.now() }])
+    assert.ok(calledUrls.length >= 1)
+    assert.equal(
+      calledUrls.every((url) => url === 'http://fake/chat/completions'),
+      true
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})

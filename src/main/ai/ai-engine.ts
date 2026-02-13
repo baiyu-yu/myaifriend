@@ -1006,6 +1006,14 @@ export class AIEngine {
     return next
   }
 
+  private resolveChatCompletionUrl(baseUrl: string): string {
+    const raw = String(baseUrl || '').trim()
+    if (!raw) return '/chat/completions'
+    const trimmed = raw.replace(/\/+$/, '')
+    if (/\/chat\/completions$/i.test(trimmed)) return trimmed
+    return `${trimmed}/chat/completions`
+  }
+
   private buildRequestBody(
     modelName: string,
     messages: ChatMessage[],
@@ -1054,7 +1062,7 @@ export class AIEngine {
     const controller = new AbortController()
     this.abortControllers.add(controller)
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    const url = `${apiConfig.baseUrl}/chat/completions`
+    const url = this.resolveChatCompletionUrl(apiConfig.baseUrl)
     const safeRequestLog = {
       request_id: requestId,
       url,
