@@ -90,3 +90,8 @@ git push origin v1.0.1
 ## AI 协作规范
 请阅读 `docs/ai-collab-rules.md`。  
 其中包含“每次修改后执行 git add/commit/push 同步远程仓库”的规范流程。
+
+## Local Mock API (for cost-free testing)
+- Start: `npm run mock:api`
+- Endpoint: `http://127.0.0.1:8787/v1/chat/completions`
+- Setup guide: `docs/mock-api-server.md`
