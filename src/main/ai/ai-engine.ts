@@ -186,12 +186,15 @@ export class AIEngine {
   ): Promise<ChatCompletionResponse> {
     const prepared = await this.prepareContext(messages, taskType)
     const safeTools = Array.isArray(tools) ? tools : []
+    const latestUserText = getLastUserMessage(messages)?.content || ''
 
     this.logWorkflow('chat_start', {
       trigger: invokeContext?.trigger || 'text_input',
       incoming_messages: messages.length,
       prepared_messages: prepared.messages.length,
       tool_count: safeTools.length,
+      tools: safeTools.map((item) => item.name).join(',') || 'none',
+      latest_user_preview: truncate(latestUserText, 320),
     })
 
     const plan = await this.dispatchViaPremier(prepared.messages, safeTools, invokeContext)
@@ -239,7 +242,9 @@ export class AIEngine {
   private mapWorkerModelToTaskType(modelType: WorkerModelType, inputPrompt: string): TaskType {
     if (modelType === 'rp') return 'roleplay'
     if (modelType === 'coder') return 'code_generation'
-    return /image|screenshot|vision|ocr|图片|图像|识别/.test(inputPrompt.toLowerCase()) ? 'vision' : 'premier'
+    return /image|screenshot|vision|ocr|图片|图像|识别/.test(inputPrompt.toLowerCase())
+      ? 'vision'
+      : 'tool_calling'
   }
 
   private buildFallbackPlan(reason: string): WorkflowPlan {
@@ -468,6 +473,8 @@ export class AIEngine {
 
     const taskMessages = this.buildTaskMessages(task, latestUserText, preparedMessages, dependencyResults, plan.final_intent)
     const shouldUseTools = task.use_tools && Boolean(this.toolExecutor) && tools.length > 0
+    const taskStartAt = Date.now()
+    const toolNames = shouldUseTools ? tools.map((item) => item.name).join(',') || 'none' : 'none'
 
     this.logWorkflow('task_start', {
       workflow_id: plan.workflow_id,
@@ -477,19 +484,62 @@ export class AIEngine {
       model: modelName,
       deps: task.dependencies.join(',') || 'none',
       use_tools: shouldUseTools,
+      tool_count: shouldUseTools ? tools.length : 0,
+      tools: toolNames,
     })
 
     let response = await this.requestChatCompletion(
       apiConfig,
       this.buildRequestBody(modelName, taskMessages, shouldUseTools ? tools : [])
     )
+    let toolCallMessage = response.choices?.[0]?.message
+    const firstFinishReason = response.choices?.[0]?.finish_reason || ''
+    let retryUsed = false
 
-    const firstMessage = response.choices?.[0]?.message
     const toolOutputs: Array<{ name: string; content: string; isError?: boolean }> = []
 
-    if (shouldUseTools && firstMessage?.tool_calls?.length && this.toolExecutor) {
+    if (shouldUseTools && this.toolExecutor && !(toolCallMessage?.tool_calls?.length)) {
+      this.logWorkflow(
+        'task_tool_calls_missing',
+        {
+          workflow_id: plan.workflow_id,
+          task_id: task.task_id,
+          finish_reason: firstFinishReason,
+          assistant_preview: truncate(typeof toolCallMessage?.content === 'string' ? toolCallMessage.content : '', 260),
+          tools: toolNames,
+        },
+        'warn'
+      )
+
+      retryUsed = true
+      const retryMessages: ChatMessage[] = [
+        ...taskMessages,
+        {
+          id: `tool-retry-${task.task_id}-${Date.now()}`,
+          role: 'system',
+          content:
+            'Tool use is required for this task. You must call at least one tool from the provided tool list before giving the final answer.',
+          timestamp: Date.now(),
+        },
+      ]
+      response = await this.requestChatCompletion(apiConfig, this.buildRequestBody(modelName, retryMessages, tools))
+      toolCallMessage = response.choices?.[0]?.message
+      this.logWorkflow(
+        'task_tool_calls_retry',
+        {
+          workflow_id: plan.workflow_id,
+          task_id: task.task_id,
+          retry_tool_calls: toolCallMessage?.tool_calls?.length || 0,
+          retry_finish_reason: response.choices?.[0]?.finish_reason || '',
+          retry_preview: truncate(typeof toolCallMessage?.content === 'string' ? toolCallMessage.content : '', 260),
+        },
+        toolCallMessage?.tool_calls?.length ? 'info' : 'warn'
+      )
+    }
+
+    if (shouldUseTools && toolCallMessage?.tool_calls?.length && this.toolExecutor) {
       const toolMessages: ChatMessage[] = []
-      for (const toolCall of firstMessage.tool_calls) {
+      for (const toolCall of toolCallMessage.tool_calls) {
         const name = toolCall.function?.name || ''
         let parsedArgs: Record<string, unknown> = {}
         try {
@@ -498,8 +548,26 @@ export class AIEngine {
           parsedArgs = {}
         }
 
+        this.logWorkflow('task_tool_exec', {
+          workflow_id: plan.workflow_id,
+          task_id: task.task_id,
+          tool: name,
+          args_preview: truncate(JSON.stringify(parsedArgs), 260),
+        })
+
         const result = await this.toolExecutor(name, parsedArgs)
         toolOutputs.push({ name, content: result.content || '', isError: result.isError })
+        this.logWorkflow(
+          'task_tool_result',
+          {
+            workflow_id: plan.workflow_id,
+            task_id: task.task_id,
+            tool: name,
+            is_error: Boolean(result.isError),
+            result_preview: truncate(result.content || '', 260),
+          },
+          result.isError ? 'warn' : 'info'
+        )
         toolMessages.push({
           id: `tool-${task.task_id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           role: 'tool',
@@ -514,9 +582,9 @@ export class AIEngine {
         {
           id: `assistant-tool-call-${task.task_id}-${Date.now()}`,
           role: 'assistant',
-          content: (typeof firstMessage.content === 'string' ? firstMessage.content : '') || '',
+          content: (typeof toolCallMessage.content === 'string' ? toolCallMessage.content : '') || '',
           timestamp: Date.now(),
-          toolCalls: firstMessage.tool_calls.map((item) => ({
+          toolCalls: toolCallMessage.tool_calls.map((item) => ({
             id: item.id,
             name: item.function.name,
             arguments: (() => {
@@ -552,6 +620,10 @@ export class AIEngine {
       output_length: output.length,
       tool_calls: toolOutputs.length,
       tool_errors: toolOutputs.filter((item) => item.isError).length,
+      finish_reason: response.choices?.[0]?.finish_reason || '',
+      first_finish_reason: firstFinishReason,
+      retry_used: retryUsed,
+      duration_ms: Date.now() - taskStartAt,
     })
 
     return {
