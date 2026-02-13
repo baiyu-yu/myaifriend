@@ -406,7 +406,20 @@
             </template>
           </el-table-column>
           <el-table-column prop="source" label="来源" width="130" />
-          <el-table-column prop="message" label="内容" />
+          <el-table-column label="内容">
+            <template #default="{ row }">
+              <div class="runtime-log-preview">{{ toRuntimeLogPreview(row.message) }}</div>
+              <el-button
+                v-if="isRuntimeLogOverflow(row.message)"
+                link
+                type="primary"
+                size="small"
+                @click="openRuntimeLogDialog(row)"
+              >
+                展开
+              </el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </el-tab-pane>
 
@@ -496,6 +509,15 @@
       <template #footer>
         <el-button @click="showCharDialog = false">取消</el-button>
         <el-button type="primary" @click="saveChar">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="runtimeLogDialogVisible" :title="runtimeLogDialogTitle" width="70%" top="8vh" append-to-body>
+      <el-scrollbar max-height="62vh">
+        <pre class="runtime-log-detail">{{ runtimeLogDialogContent }}</pre>
+      </el-scrollbar>
+      <template #footer>
+        <el-button @click="runtimeLogDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -912,6 +934,10 @@ const memoryRows = ref<MemoryRow[]>([])
 const memoriesLoading = ref(false)
 const runtimeLogs = ref<RuntimeLogRow[]>([])
 const logLevelFilter = ref<'all' | 'info' | 'warn' | 'error'>('all')
+const runtimeLogPreviewLimit = 220
+const runtimeLogDialogVisible = ref(false)
+const runtimeLogDialogTitle = ref('日志详情')
+const runtimeLogDialogContent = ref('')
 const storageDir = ref('')
 const pendingStorageDir = ref('')
 let logRefreshTimer: ReturnType<typeof setInterval> | null = null
@@ -1047,6 +1073,22 @@ function runtimeLogRowClass(args: { row: RuntimeLogRow }) {
   if (args.row.level === 'error') return 'log-row-error'
   if (args.row.level === 'warn') return 'log-row-warn'
   return 'log-row-info'
+}
+
+function isRuntimeLogOverflow(message: string): boolean {
+  return String(message || '').length > runtimeLogPreviewLimit
+}
+
+function toRuntimeLogPreview(message: string): string {
+  const text = String(message || '')
+  if (text.length <= runtimeLogPreviewLimit) return text
+  return `${text.slice(0, runtimeLogPreviewLimit)}...`
+}
+
+function openRuntimeLogDialog(row: RuntimeLogRow) {
+  runtimeLogDialogTitle.value = `${formatTime(row.timestamp)} | ${row.source} | ${row.level.toUpperCase()}`
+  runtimeLogDialogContent.value = String(row.message || '')
+  runtimeLogDialogVisible.value = true
 }
 
 function stopLogAutoRefresh() {
@@ -1481,6 +1523,21 @@ onBeforeUnmount(() => {
 
 :deep(.log-row-error .el-table__cell) {
   background: rgba(239, 68, 68, 0.08);
+}
+
+.runtime-log-preview {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+.runtime-log-detail {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #1f2937;
 }
 
 @media (max-width: 768px) {

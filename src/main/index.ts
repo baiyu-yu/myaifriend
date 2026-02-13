@@ -162,7 +162,11 @@ class Application {
     this.configManager = new ConfigManager(storageDir)
     this.conversationManager = new ConversationManager(storageDir)
     this.toolManager = new ToolManager(() => this.configManager.getAll())
-    this.aiEngine = new AIEngine(this.configManager, (name, args) => this.toolManager.execute(name, args))
+    this.aiEngine = new AIEngine(
+      this.configManager,
+      (name, args) => this.toolManager.execute(name, args),
+      (level, message, source) => this.addRuntimeLog(level, message, source || 'chat-workflow')
+    )
     this.memoryManager = new MemoryManager(storageDir)
     this.fileWatcher = new FileWatcher()
 

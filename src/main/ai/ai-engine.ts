@@ -65,6 +65,7 @@ type StepExecutionResult = {
 }
 
 type ToolExecutor = (name: string, args: Record<string, unknown>) => Promise<ToolResult>
+type WorkflowLogEmitter = (level: 'info' | 'warn' | 'error', message: string, source?: string) => void
 
 export function estimateTokens(messages: ChatMessage[]): number {
   const chars = messages.reduce((sum, m) => sum + m.content.length, 0)
@@ -149,11 +150,13 @@ export class AIEngine {
   private memoryManager: MemoryManager
   private abortController: AbortController | null = null
   private toolExecutor?: ToolExecutor
+  private workflowLogger?: WorkflowLogEmitter
 
-  constructor(configManager: ConfigManager, toolExecutor?: ToolExecutor) {
+  constructor(configManager: ConfigManager, toolExecutor?: ToolExecutor, workflowLogger?: WorkflowLogEmitter) {
     this.configManager = configManager
     this.memoryManager = new MemoryManager()
     this.toolExecutor = toolExecutor
+    this.workflowLogger = workflowLogger
   }
 
   async chat(
@@ -166,6 +169,16 @@ export class AIEngine {
   ): Promise<ChatCompletionResponse> {
     const prepared = await this.prepareContext(messages, taskType)
     const safeTools = Array.isArray(tools) ? tools : []
+    this.logWorkflow(
+      '请求上下文',
+      [
+        `taskType=${taskType}`,
+        `invokeContext=${invokeContext ? JSON.stringify(invokeContext) : 'text_input'}`,
+        `tools=\n${this.serializeTools(safeTools) || 'none'}`,
+        `原始消息:\n${this.serializeMessages(messages) || 'none'}`,
+        `预处理后消息:\n${this.serializeMessages(prepared.messages) || 'none'}`,
+      ].join('\n\n')
+    )
     const plan = await this.dispatchViaPremier(prepared.messages, safeTools, invokeContext)
     const stepResults = await this.executeWorkChain(plan.steps, prepared.messages, apiConfigId, model, safeTools)
     const finalResponse = await this.buildFinalResponse(
@@ -177,8 +190,39 @@ export class AIEngine {
     )
 
     const assistantContent = finalResponse.choices?.[0]?.message?.content || ''
+    this.logWorkflow('最终回复', assistantContent || '空回复')
     this.rememberIfNeeded(prepared.messages, assistantContent)
     return finalResponse
+  }
+
+  private logWorkflow(title: string, content: string, level: 'info' | 'warn' | 'error' = 'info') {
+    if (!this.workflowLogger) return
+    this.workflowLogger(level, `[工作流] ${title}\n${content}`, 'chat-workflow')
+  }
+
+  private serializeMessages(messages: ChatMessage[]): string {
+    return messages
+      .map((item, idx) => {
+        const toolCalls = Array.isArray(item.toolCalls)
+          ? item.toolCalls
+              .map((tc, tcIndex) => {
+                return `  toolCall#${tcIndex + 1}: ${tc.name} args=${JSON.stringify(tc.arguments || {})}`
+              })
+              .join('\n')
+          : ''
+        const toolCallId = item.toolCallId ? `\n  toolCallId=${item.toolCallId}` : ''
+        return `[${idx + 1}] role=${item.role}${toolCallId}\n${item.content || ''}${toolCalls ? `\n${toolCalls}` : ''}`
+      })
+      .join('\n\n')
+  }
+
+  private serializeTools(tools: ToolDefinition[]): string {
+    return tools
+      .map((tool) => {
+        const params = Object.keys(tool.parameters || {})
+        return `- ${tool.name}: ${tool.description} | params=${params.join(', ') || 'none'}`
+      })
+      .join('\n')
   }
 
   private async dispatchViaPremier(
@@ -202,6 +246,13 @@ export class AIEngine {
     }
 
     const plannerInput = await this.buildPlannerInput(messages, tools, invokeContext)
+    this.logWorkflow(
+      '总理模型规划请求',
+      [
+        `model=${modelName}`,
+        `plannerInput:\n${plannerInput}`,
+      ].join('\n\n')
+    )
     try {
       const response = await this.requestChatCompletion(apiConfig, {
         model: modelName,
@@ -212,13 +263,22 @@ export class AIEngine {
       })
       const raw = response.choices?.[0]?.message?.content || ''
       const parsed = this.parseWorkChainPlan(raw)
+      this.logWorkflow(
+        '总理模型规划结果',
+        [
+          `raw:\n${raw || '空'}`,
+          `parsed:\n${JSON.stringify(parsed, null, 2)}`,
+        ].join('\n\n')
+      )
       if (parsed.steps.length > 0) {
         return parsed
       }
     } catch (err) {
+      this.logWorkflow('总理模型规划失败', String(err), 'warn')
       console.warn('[AIEngine] Premier dispatch failed, fallback to direct response:', err)
     }
 
+    this.logWorkflow('总理模型规划降级', '使用单步 premier 直接回复。', 'warn')
     return {
       steps: [{ taskType: 'premier', instruction: '直接回答用户问题。', intent: '直接回复', useTools: true }],
       finalInstruction: '输出简洁、准确、可执行的最终答复。',
@@ -277,7 +337,8 @@ export class AIEngine {
   ): Promise<StepExecutionResult[]> {
     const latestUserText = getLastUserMessage(preparedMessages)?.content || ''
     const results: StepExecutionResult[] = []
-    for (const step of steps) {
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index]
       const { apiConfig, modelName } = this.resolveModelRoute(step.taskType, apiConfigId, model)
       if (!apiConfig) {
         throw new Error('未配置可用 API，请先在设置页添加 API 配置。')
@@ -321,6 +382,16 @@ export class AIEngine {
           timestamp: Date.now(),
         },
       ]
+      this.logWorkflow(
+        `步骤${index + 1}请求`,
+        [
+          `taskType=${step.taskType}`,
+          `model=${modelName}`,
+          `useTools=${step.useTools !== false}`,
+          `stepPrompt:\n${stepPrompt}`,
+          `stepMessages:\n${this.serializeMessages(stepMessages)}`,
+        ].join('\n\n')
+      )
 
       let response = await this.requestChatCompletion(
         apiConfig,
@@ -330,6 +401,12 @@ export class AIEngine {
       const toolOutputs: Array<{ name: string; content: string; isError?: boolean }> = []
       if (step.useTools && message?.tool_calls && message.tool_calls.length > 0 && this.toolExecutor) {
         const toolMessages: ChatMessage[] = []
+        this.logWorkflow(
+          `步骤${index + 1}工具调用计划`,
+          message.tool_calls
+            .map((toolCall, callIndex) => `#${callIndex + 1} ${toolCall.function?.name} args=${toolCall.function?.arguments || '{}'}`)
+            .join('\n')
+        )
         for (const toolCall of message.tool_calls) {
           const name = toolCall.function?.name || ''
           let args: Record<string, unknown> = {}
@@ -339,6 +416,15 @@ export class AIEngine {
             args = {}
           }
           const result = await this.toolExecutor(name, args)
+          this.logWorkflow(
+            `步骤${index + 1}工具调用结果`,
+            [
+              `tool=${name}`,
+              `args=${JSON.stringify(args)}`,
+              `isError=${Boolean(result.isError)}`,
+              `content=\n${result.content || ''}`,
+            ].join('\n')
+          )
           toolOutputs.push({ name, content: result.content || '', isError: result.isError })
           toolMessages.push({
             id: `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -379,14 +465,33 @@ export class AIEngine {
           apiConfig,
           this.buildRequestBody(modelName, followUpMessages, step.useTools ? tools : [])
         )
+        this.logWorkflow(
+          `步骤${index + 1}工具回填后续请求`,
+          this.serializeMessages(followUpMessages)
+        )
       }
-      results.push({
+      const stepResult = {
         taskType: step.taskType,
         modelName,
         instruction: step.instruction,
         content: response.choices?.[0]?.message?.content || '',
         toolOutputs,
-      })
+      }
+      this.logWorkflow(
+        `步骤${index + 1}执行结果`,
+        [
+          `taskType=${stepResult.taskType}`,
+          `model=${stepResult.modelName}`,
+          `instruction=${stepResult.instruction}`,
+          `content=\n${stepResult.content || ''}`,
+          stepResult.toolOutputs.length > 0
+            ? `toolOutputs=\n${stepResult.toolOutputs
+                .map((item) => `${item.name}${item.isError ? '(error)' : ''}: ${item.content}`)
+                .join('\n')}`
+            : 'toolOutputs=none',
+        ].join('\n\n')
+      )
+      results.push(stepResult)
     }
     return results
   }
@@ -442,7 +547,17 @@ export class AIEngine {
         timestamp: Date.now(),
       },
     ]
+    this.logWorkflow(
+      '最终汇总请求',
+      [
+        `model=${modelName}`,
+        `plan=${JSON.stringify(plan, null, 2)}`,
+        `stepSummary=\n${summary || '无'}`,
+        `finalMessages=\n${this.serializeMessages(finalMessages)}`,
+      ].join('\n\n')
+    )
     const response = await this.requestChatCompletion(apiConfig, this.buildRequestBody(modelName, finalMessages, []))
+    this.logWorkflow('最终汇总响应', response.choices?.[0]?.message?.content || '空响应')
     response.meta = {
       model: modelName,
       taskType: 'premier',
