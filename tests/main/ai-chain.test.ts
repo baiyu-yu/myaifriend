@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { injectMemorySystemPrompt, shouldCompressContext } from '../../src/main/ai/ai-engine'
-import type { AppConfig, ChatMessage } from '../../src/common/types'
+import type { AppConfig, ChatMessage, ToolDefinition } from '../../src/common/types'
 import { DEFAULT_CONFIG } from '../../src/common/defaults'
 
 function buildConfig(partial?: Partial<AppConfig>): AppConfig {
@@ -148,6 +148,108 @@ test('ai engine normalizes duplicated /chat/completions suffix in baseUrl', asyn
       calledUrls.every((url) => url === 'http://fake/chat/completions'),
       true
     )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('ai engine uses deterministic tool fallback when model keeps returning empty tool responses', async () => {
+  const config = buildConfig({
+    apiConfigs: [{ id: 'api-1', name: 'local', baseUrl: 'http://fake', apiKey: 'k', defaultModel: 'gpt-a', availableModels: [] }],
+    modelAssignments: {
+      ...DEFAULT_CONFIG.modelAssignments,
+      premier: { apiConfigId: 'api-1', model: 'gpt-premier' },
+      tool_calling: { apiConfigId: 'api-1', model: 'gpt-tool' },
+    },
+    agentChain: {
+      ...DEFAULT_CONFIG.agentChain,
+      enableMemory: false,
+      enableContextCompression: false,
+    },
+  })
+
+  const tools: ToolDefinition[] = [
+    {
+      name: 'live2d_control',
+      description: 'control',
+      parameters: {
+        action_type: { type: 'string', description: 'type' },
+        action_name: { type: 'string', description: 'name' },
+      },
+      required: ['action_type', 'action_name'],
+    },
+  ]
+
+  const { AIEngine } = await import('../../src/main/ai/ai-engine')
+  const executed: Array<{ name: string; args: Record<string, unknown> }> = []
+  const engine = new AIEngine(
+    { getAll: () => config } as any,
+    async (name: string, args: Record<string, unknown>) => {
+      executed.push({ name, args })
+      return { toolCallId: 'fallback-call', content: 'fallback-ok' }
+    }
+  )
+
+  const originalFetch = globalThis.fetch
+  let fetchCount = 0
+  globalThis.fetch = (async () => {
+    fetchCount += 1
+    if (fetchCount === 1) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content:
+                    '{"workflow_id":"wf_fallback","tasks":[{"task_id":"task_1","model_type":"tool","input_prompt":"收起live2d形象右边马尾","dependencies":[],"use_tools":true}],"final_intent":"reply"}',
+                },
+                finish_reason: 'stop',
+              },
+            ],
+          }),
+      }
+    }
+    if (fetchCount === 2 || fetchCount === 3) {
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            choices: [
+              {
+                message: { role: 'assistant', content: '' },
+                finish_reason: null,
+              },
+            ],
+          }),
+      }
+    }
+    return {
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          choices: [{ message: { role: 'assistant', content: 'done' }, finish_reason: 'stop' }],
+        }),
+    }
+  }) as any
+
+  try {
+    const result = await engine.chat(
+      [{ id: 'u1', role: 'user', content: '收起live2d形象右边马尾', timestamp: Date.now() }],
+      undefined,
+      undefined,
+      'premier',
+      tools
+    )
+    assert.equal(executed.length, 1)
+    assert.equal(executed[0].name, 'live2d_control')
+    assert.deepEqual(executed[0].args, { action_type: 'expression', action_name: '马尾R隐藏' })
+    assert.equal(result.choices?.[0]?.message?.content, 'done')
   } finally {
     globalThis.fetch = originalFetch
   }

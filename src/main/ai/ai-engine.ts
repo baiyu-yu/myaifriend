@@ -452,6 +452,103 @@ export class AIEngine {
     ]
   }
 
+  private extractHtmlPathFromText(text: string): string {
+    const raw = String(text || '').trim()
+    if (!raw) return ''
+
+    const absoluteMatch = raw.match(/[a-zA-Z]:[\\/][^\s'"`]+\.html?/i)
+    if (absoluteMatch?.[0]) return absoluteMatch[0]
+
+    const relativeMatch = raw.match(/[\w./\\-]+\.html?/i)
+    if (relativeMatch?.[0]) return relativeMatch[0].replace(/\\/g, '/')
+
+    return ''
+  }
+
+  private extractHtmlPathFromDependencies(dependencyResults: TaskExecutionResult[]): string {
+    for (let i = dependencyResults.length - 1; i >= 0; i -= 1) {
+      const dependency = dependencyResults[i]
+      const fromOutput = this.extractHtmlPathFromText(dependency.output)
+      if (fromOutput) return fromOutput
+      for (let j = dependency.toolOutputs.length - 1; j >= 0; j -= 1) {
+        const fromTool = this.extractHtmlPathFromText(dependency.toolOutputs[j].content)
+        if (fromTool) return fromTool
+      }
+    }
+    return ''
+  }
+
+  private extractHtmlContentFromDependencies(dependencyResults: TaskExecutionResult[]): string {
+    for (let i = dependencyResults.length - 1; i >= 0; i -= 1) {
+      const output = String(dependencyResults[i].output || '')
+      if (!output.trim()) continue
+      const fenced = output.match(/```html\s*([\s\S]*?)```/i)
+      if (fenced?.[1]?.trim()) {
+        return fenced[1].trim()
+      }
+      if (/<!doctype html/i.test(output) || /<html[\s>]/i.test(output)) {
+        return output.trim()
+      }
+    }
+    return '<!doctype html><html><head><meta charset="utf-8"><title>Generated</title></head><body><h1>Hello!</h1></body></html>'
+  }
+
+  private buildDeterministicToolFallback(
+    task: WorkflowTask,
+    latestUserText: string,
+    dependencyResults: TaskExecutionResult[]
+  ): { name: string; args: Record<string, unknown>; reason: string } | null {
+    const instruction = String(task.input_prompt || '')
+    const merged = `${instruction}\n${latestUserText}`
+    const normalized = merged.toLowerCase()
+
+    if (/马尾r隐藏|右边马尾|右马尾/.test(merged)) {
+      return {
+        name: 'live2d_control',
+        args: { action_type: 'expression', action_name: '马尾R隐藏' },
+        reason: 'matched_right_ponytail_action',
+      }
+    }
+
+    if (/手柄/.test(merged)) {
+      return {
+        name: 'live2d_control',
+        args: { action_type: 'expression', action_name: '手柄' },
+        reason: 'matched_controller_action',
+      }
+    }
+
+    const hasHtmlIntent = /html/.test(normalized)
+    if (hasHtmlIntent && /(write|create|generate|save|写入|创建|生成|保存)/.test(normalized)) {
+      const targetPath =
+        this.extractHtmlPathFromText(instruction) ||
+        this.extractHtmlPathFromDependencies(dependencyResults) ||
+        'generated_view.html'
+      return {
+        name: 'file_write',
+        args: {
+          path: targetPath,
+          content: this.extractHtmlContentFromDependencies(dependencyResults),
+        },
+        reason: 'matched_html_write_action',
+      }
+    }
+
+    if (hasHtmlIntent && /(open|打开)/.test(normalized)) {
+      const targetPath =
+        this.extractHtmlPathFromText(instruction) ||
+        this.extractHtmlPathFromDependencies(dependencyResults) ||
+        'generated_view.html'
+      return {
+        name: 'open_in_browser',
+        args: { path: targetPath },
+        reason: 'matched_html_open_action',
+      }
+    }
+
+    return null
+  }
+
   private async executeSingleTask(
     task: WorkflowTask,
     plan: WorkflowPlan,
@@ -495,6 +592,9 @@ export class AIEngine {
     let toolCallMessage = response.choices?.[0]?.message
     const firstFinishReason = response.choices?.[0]?.finish_reason || ''
     let retryUsed = false
+    let fallbackUsed = false
+    let fallbackTool = ''
+    let fallbackOutput = ''
 
     const toolOutputs: Array<{ name: string; content: string; isError?: boolean }> = []
 
@@ -535,6 +635,39 @@ export class AIEngine {
         },
         toolCallMessage?.tool_calls?.length ? 'info' : 'warn'
       )
+    }
+
+    if (shouldUseTools && this.toolExecutor && !(toolCallMessage?.tool_calls?.length)) {
+      const fallback = this.buildDeterministicToolFallback(task, latestUserText, dependencyResults)
+      if (fallback) {
+        this.logWorkflow(
+          'task_tool_fallback',
+          {
+            workflow_id: plan.workflow_id,
+            task_id: task.task_id,
+            tool: fallback.name,
+            reason: fallback.reason,
+            args_preview: truncate(JSON.stringify(fallback.args), 260),
+          },
+          'warn'
+        )
+        const fallbackResult = await this.toolExecutor(fallback.name, fallback.args)
+        fallbackUsed = true
+        fallbackTool = fallback.name
+        fallbackOutput = fallbackResult.content || ''
+        toolOutputs.push({ name: fallback.name, content: fallbackOutput, isError: fallbackResult.isError })
+        this.logWorkflow(
+          'task_tool_fallback_result',
+          {
+            workflow_id: plan.workflow_id,
+            task_id: task.task_id,
+            tool: fallback.name,
+            is_error: Boolean(fallbackResult.isError),
+            result_preview: truncate(fallbackOutput, 260),
+          },
+          fallbackResult.isError ? 'warn' : 'info'
+        )
+      }
     }
 
     if (shouldUseTools && toolCallMessage?.tool_calls?.length && this.toolExecutor) {
@@ -612,7 +745,10 @@ export class AIEngine {
     }
 
     const outputContent = response.choices?.[0]?.message?.content
-    const output = typeof outputContent === 'string' ? outputContent : ''
+    let output = typeof outputContent === 'string' ? outputContent : ''
+    if (!output.trim() && fallbackUsed) {
+      output = fallbackOutput
+    }
 
     this.logWorkflow('task_done', {
       workflow_id: plan.workflow_id,
@@ -623,6 +759,8 @@ export class AIEngine {
       finish_reason: response.choices?.[0]?.finish_reason || '',
       first_finish_reason: firstFinishReason,
       retry_used: retryUsed,
+      fallback_used: fallbackUsed,
+      fallback_tool: fallbackTool || 'none',
       duration_ms: Date.now() - taskStartAt,
     })
 
