@@ -1,8 +1,8 @@
-import { shell } from 'electron'
+﻿import { shell } from 'electron'
 import fs from 'fs/promises'
-import path from 'path'
 import { ITool } from '../tool-manager'
 import { AppConfig, ToolDefinition, ToolResult } from '../../../common/types'
+import { resolvePathInWatchFolders } from '../watch-folder-guard'
 
 export class OpenBrowserTool implements ITool {
   private getConfig?: () => AppConfig
@@ -13,88 +13,45 @@ export class OpenBrowserTool implements ITool {
 
   definition: ToolDefinition = {
     name: 'open_in_browser',
-    description: '使用系统默认浏览器打开 HTML 文件或 URL。',
+    description: 'Open an HTML file (inside watch folders) or URL in system default browser.',
     parameters: {
       path: {
         type: 'string',
-        description: '目标 HTML 文件路径或 URL（相对路径会基于 watch_folder 解析）',
+        description: 'Target HTML file path or URL',
       },
       watch_folder: {
         type: 'string',
-        description: '监听目录路径。配置多个监听目录时建议显式指定。',
+        description: 'Watch folder path when multiple watch folders are configured',
       },
     },
     required: ['path'],
   }
 
-  private isPathInside(rootPath: string, targetPath: string): boolean {
-    const relative = path.relative(path.resolve(rootPath), path.resolve(targetPath))
-    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
-  }
-
-  private resolveLocalPath(args: Record<string, unknown>): { ok: true; path: string } | { ok: false; reason: string } {
+  private resolvePath(args: Record<string, unknown>): { ok: true; path: string } | { ok: false; reason: string } {
     const rawPath = String(args.path || '').trim()
     if (!rawPath) {
-      return { ok: false, reason: '参数 path 不能为空' }
+      return { ok: false, reason: 'path is required' }
     }
+
     if (rawPath.startsWith('http://') || rawPath.startsWith('https://')) {
       return { ok: true, path: rawPath }
     }
 
-    const watchFolders = (this.getConfig?.().watchFolders || [])
-      .map((item) => String(item || '').trim())
-      .filter(Boolean)
-    const selectedWatchFolder = String(args.watch_folder || '').trim()
-
-    let baseFolder = ''
-    if (selectedWatchFolder) {
-      const normalizedSelected = path.resolve(selectedWatchFolder)
-      baseFolder =
-        watchFolders.find(
-          (folder) => path.normalize(path.resolve(folder)).toLowerCase() === path.normalize(normalizedSelected).toLowerCase()
-        ) || ''
-      if (!baseFolder) {
-        return {
-          ok: false,
-          reason: `watch_folder 不在监听目录列表中，可选值: ${watchFolders.join(' | ')}`,
-        }
-      }
-    } else if (!path.isAbsolute(rawPath) && watchFolders.length === 1) {
-      baseFolder = watchFolders[0]
+    const resolved = resolvePathInWatchFolders({
+      rawPath,
+      selectedWatchFolder: String(args.watch_folder || ''),
+      watchFolders: this.getConfig?.().watchFolders || [],
+      operationName: 'open_in_browser',
+    })
+    if (!resolved.ok) {
+      return { ok: false, reason: resolved.reason }
     }
 
-    if (!baseFolder && watchFolders.length > 1) {
-      return {
-        ok: false,
-        reason: `存在多个监听目录，请指定 watch_folder。可选值: ${watchFolders.join(' | ')}`,
-      }
-    }
-
-    const resolved = path.isAbsolute(rawPath)
-      ? path.resolve(rawPath)
-      : path.resolve(path.resolve(baseFolder || process.cwd()), rawPath)
-
-    if (watchFolders.length > 0) {
-      const inWatchFolders = watchFolders.some((folder) => this.isPathInside(folder, resolved))
-      if (!inWatchFolders) {
-        return {
-          ok: false,
-          reason: `目标路径不在监听目录内: ${resolved}，监听目录: ${watchFolders.join(' | ')}`,
-        }
-      }
-      if (baseFolder && !this.isPathInside(baseFolder, resolved)) {
-        return {
-          ok: false,
-          reason: `目标路径不在指定 watch_folder 内: ${baseFolder}`,
-        }
-      }
-    }
-
-    return { ok: true, path: resolved }
+    return { ok: true, path: resolved.path }
   }
 
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
-    const resolved = this.resolveLocalPath(args)
+    const resolved = this.resolvePath(args)
     if (!resolved.ok) {
       return {
         toolCallId: '',
@@ -112,7 +69,7 @@ export class OpenBrowserTool implements ITool {
         if (!stat || !stat.isFile()) {
           return {
             toolCallId: '',
-            content: `打开失败: 文件不存在或不是文件 ${targetPath}`,
+            content: `Open failed: file does not exist or is not a file: ${targetPath}`,
             isError: true,
           }
         }
@@ -120,17 +77,17 @@ export class OpenBrowserTool implements ITool {
         if (openError) {
           return {
             toolCallId: '',
-            content: `打开失败: ${openError}`,
+            content: `Open failed: ${openError}`,
             isError: true,
           }
         }
       }
 
-      return { toolCallId: '', content: `已打开: ${targetPath}` }
+      return { toolCallId: '', content: `Opened: ${targetPath}` }
     } catch (error) {
       return {
         toolCallId: '',
-        content: `打开失败: ${error instanceof Error ? error.message : String(error)}`,
+        content: `Open failed: ${error instanceof Error ? error.message : String(error)}`,
         isError: true,
       }
     }

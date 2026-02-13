@@ -1,26 +1,43 @@
-import fs from 'fs/promises'
+﻿import fs from 'fs/promises'
 import path from 'path'
 import { ITool } from '../tool-manager'
-import { ToolDefinition, ToolResult } from '../../../common/types'
+import { AppConfig, ToolDefinition, ToolResult } from '../../../common/types'
+import { resolvePathInWatchFolders } from '../watch-folder-guard'
 
 export class FileInfoTool implements ITool {
+  private getConfig?: () => AppConfig
+
+  constructor(getConfig?: () => AppConfig) {
+    this.getConfig = getConfig
+  }
+
   definition: ToolDefinition = {
     name: 'file_info',
-    description: '读取文件或目录的基础信息（类型、大小、时间、扩展名）。',
+    description: 'Read basic metadata for a file or directory.',
     parameters: {
       path: {
         type: 'string',
-        description: '目标文件或目录完整路径',
+        description: 'Target file or directory path',
+      },
+      watch_folder: {
+        type: 'string',
+        description: 'Watch folder path when multiple watch folders are configured',
       },
     },
     required: ['path'],
   }
 
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
-    const targetPath = String(args.path || '').trim()
-    if (!targetPath) {
-      return { toolCallId: '', content: '参数 path 不能为空', isError: true }
+    const resolved = resolvePathInWatchFolders({
+      rawPath: String(args.path || ''),
+      selectedWatchFolder: String(args.watch_folder || ''),
+      watchFolders: this.getConfig?.().watchFolders || [],
+      operationName: 'file_info',
+    })
+    if (!resolved.ok) {
+      return { toolCallId: '', content: resolved.reason, isError: true }
     }
+    const targetPath = resolved.path
 
     try {
       const stat = await fs.stat(targetPath)
@@ -37,10 +54,9 @@ export class FileInfoTool implements ITool {
     } catch (error) {
       return {
         toolCallId: '',
-        content: `读取文件信息失败: ${error instanceof Error ? error.message : String(error)}`,
+        content: `Read file info failed: ${error instanceof Error ? error.message : String(error)}`,
         isError: true,
       }
     }
   }
 }
-

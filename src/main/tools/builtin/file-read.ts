@@ -1,25 +1,45 @@
-import fs from 'fs/promises'
+﻿import fs from 'fs/promises'
 import path from 'path'
 import mammoth from 'mammoth'
 import ExcelJS from 'exceljs'
 import { ITool } from '../tool-manager'
-import { ToolDefinition, ToolResult } from '../../../common/types'
+import { AppConfig, ToolDefinition, ToolResult } from '../../../common/types'
+import { resolvePathInWatchFolders } from '../watch-folder-guard'
 
 export class FileReadTool implements ITool {
+  private getConfig?: () => AppConfig
+
+  constructor(getConfig?: () => AppConfig) {
+    this.getConfig = getConfig
+  }
+
   definition: ToolDefinition = {
     name: 'file_read',
-    description: '读取指定文件内容，支持 txt/doc/docx/xls/xlsx/html 与常见图片格式。',
+    description: 'Read file content under watch folders.',
     parameters: {
       path: {
         type: 'string',
-        description: '要读取的文件完整路径',
+        description: 'Full path or watch-folder-relative path to read',
+      },
+      watch_folder: {
+        type: 'string',
+        description: 'Watch folder path when multiple watch folders are configured',
       },
     },
     required: ['path'],
   }
 
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
-    const filePath = args.path as string
+    const resolved = resolvePathInWatchFolders({
+      rawPath: String(args.path || ''),
+      selectedWatchFolder: String(args.watch_folder || ''),
+      watchFolders: this.getConfig?.().watchFolders || [],
+      operationName: 'file_read',
+    })
+    if (!resolved.ok) {
+      return { toolCallId: '', content: resolved.reason, isError: true }
+    }
+    const filePath = resolved.path
     const ext = path.extname(filePath).toLowerCase()
 
     try {
@@ -29,6 +49,8 @@ export class FileReadTool implements ITool {
         case '.txt':
         case '.html':
         case '.htm':
+        case '.md':
+        case '.json':
           content = await fs.readFile(filePath, 'utf-8')
           break
 
@@ -68,19 +90,23 @@ export class FileReadTool implements ITool {
         case '.webp': {
           const imgBuffer = await fs.readFile(filePath)
           const base64 = imgBuffer.toString('base64')
-          content = `[图片文件] 格式: ${ext}, 大小: ${imgBuffer.length} bytes, Base64长度: ${base64.length}`
+          content = `[Image file] ext=${ext}, bytes=${imgBuffer.length}, base64_len=${base64.length}`
           break
         }
 
         default:
-          content = `不支持的文件格式: ${ext}`
+          return {
+            toolCallId: '',
+            content: `Unsupported file extension for file_read: ${ext}`,
+            isError: true,
+          }
       }
 
       return { toolCallId: '', content }
     } catch (error) {
       return {
         toolCallId: '',
-        content: `读取文件失败: ${error instanceof Error ? error.message : String(error)}`,
+        content: `Read file failed: ${error instanceof Error ? error.message : String(error)}`,
         isError: true,
       }
     }

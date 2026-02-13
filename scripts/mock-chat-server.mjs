@@ -93,6 +93,7 @@ function buildDefaultToolArgs(name) {
   }
   if (name === 'file_list') return { path: '.', recursive: false }
   if (name === 'file_info') return { path: 'test/2.txt' }
+  if (name === 'file_edit') return { path: 'test/generated_view.html', mode: 'append', content: '\n<!-- mock edit -->' }
   if (name === 'open_in_browser') return { path: 'test/generated_view.html' }
   if (name === 'live2d_control') return { action_type: 'expression', action_name: '马尾R隐藏' }
   if (name === 'vision_analyze') return { image_path: 'test/sample.png', prompt: 'mock vision check' }

@@ -1,36 +1,61 @@
-import fs from 'fs/promises'
+﻿import fs from 'fs/promises'
 import path from 'path'
 import { ITool } from '../tool-manager'
-import { ToolDefinition, ToolResult } from '../../../common/types'
+import { AppConfig, ToolDefinition, ToolResult } from '../../../common/types'
+import { resolvePathInWatchFolders } from '../watch-folder-guard'
 
 export class FileListTool implements ITool {
+  private getConfig?: () => AppConfig
+
+  constructor(getConfig?: () => AppConfig) {
+    this.getConfig = getConfig
+  }
+
   definition: ToolDefinition = {
     name: 'file_list',
-    description: '列出指定目录中的文件和子目录。',
+    description: 'List files and subdirectories under watch folders.',
     parameters: {
       path: {
         type: 'string',
-        description: '要列出的目录路径',
+        description: 'Directory path to list',
       },
       recursive: {
         type: 'boolean',
-        description: '是否递归列出子目录内容，默认 false',
+        description: 'Whether to recursively list subdirectories, default false',
+      },
+      watch_folder: {
+        type: 'string',
+        description: 'Watch folder path when multiple watch folders are configured',
       },
     },
     required: ['path'],
   }
 
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
-    const folderPath = args.path as string
-    const recursive = (args.recursive as boolean) || false
+    const resolved = resolvePathInWatchFolders({
+      rawPath: String(args.path || ''),
+      selectedWatchFolder: String(args.watch_folder || ''),
+      watchFolders: this.getConfig?.().watchFolders || [],
+      operationName: 'file_list',
+    })
+    if (!resolved.ok) {
+      return { toolCallId: '', content: resolved.reason, isError: true }
+    }
+    const folderPath = resolved.path
+    const recursive = Boolean(args.recursive)
 
     try {
+      const stat = await fs.stat(folderPath).catch(() => null)
+      if (!stat || !stat.isDirectory()) {
+        return { toolCallId: '', content: `List failed: path is not a directory: ${folderPath}`, isError: true }
+      }
+
       const items = await this.listDir(folderPath, recursive, 0)
       return { toolCallId: '', content: items.join('\n') }
     } catch (error) {
       return {
         toolCallId: '',
-        content: `列出文件失败: ${error instanceof Error ? error.message : String(error)}`,
+        content: `List files failed: ${error instanceof Error ? error.message : String(error)}`,
         isError: true,
       }
     }

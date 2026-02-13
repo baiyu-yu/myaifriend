@@ -12,6 +12,7 @@ import { WebSearchTool } from './builtin/web-search'
 import { MemorySearchTool } from './builtin/memory-search'
 import { ConversationSearchTool } from './builtin/conversation-search'
 import { VisionAnalyzeTool } from './builtin/vision-analyze'
+import { FileEditTool } from './builtin/file-edit'
 import { MemoryManager } from '../ai/memory-manager'
 import { ConversationManager } from '../conversation-manager'
 
@@ -139,6 +140,23 @@ export class ToolManager {
       return cloned
     }
 
+    if (cloned.name === 'file_read' || cloned.name === 'file_list' || cloned.name === 'file_info' || cloned.name === 'file_edit') {
+      const watchFolders = (config.watchFolders || []).map((item) => String(item || '').trim()).filter(Boolean)
+      cloned.parameters.watch_folder = {
+        type: 'string',
+        description: 'Watch folder path. Required when multiple watch folders are configured.',
+        ...(watchFolders.length > 0 ? { enum: watchFolders } : {}),
+      }
+      const required = new Set(cloned.required || [])
+      if (watchFolders.length > 1) {
+        required.add('watch_folder')
+      } else {
+        required.delete('watch_folder')
+      }
+      cloned.required = Array.from(required)
+      return cloned
+    }
+
     if (cloned.name === 'open_in_browser') {
       const watchFolders = (config.watchFolders || []).map((item) => String(item || '').trim()).filter(Boolean)
       if (cloned.parameters.path) {
@@ -188,10 +206,11 @@ export class ToolManager {
     memoryManager?: MemoryManager
     conversationManager?: ConversationManager
   }): void {
-    this.register(new FileReadTool())
+    this.register(new FileReadTool(this.getConfig))
     this.register(new FileWriteTool(this.getConfig))
-    this.register(new FileListTool())
-    this.register(new FileInfoTool())
+    this.register(new FileListTool(this.getConfig))
+    this.register(new FileInfoTool(this.getConfig))
+    this.register(new FileEditTool(this.getConfig))
     this.register(new OpenBrowserTool(this.getConfig))
     this.register(new Live2DControlTool())
     this.register(new VisionAnalyzeTool(this.getConfig))

@@ -1,4 +1,4 @@
-import { ITool } from '../tool-manager'
+﻿import { ITool } from '../tool-manager'
 import { AppConfig, ToolDefinition, ToolResult } from '../../../common/types'
 
 type SearchProvider = 'auto' | 'duckduckgo' | 'searxng' | 'wikipedia'
@@ -58,7 +58,7 @@ async function fetchJsonWithRetry<T>(url: string, timeoutMs: number, retries: nu
       const response = await fetch(url, {
         method: 'GET',
         signal: controller.signal,
-        headers: { 'User-Agent': 'aibot-web-search/1.1' },
+        headers: { 'User-Agent': 'aibot-web-search/1.2' },
       })
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`)
@@ -106,6 +106,12 @@ function domainAllowed(urlValue: string, allowDomains: string[], blockDomains: s
   }
 }
 
+function normalizeProvider(value: unknown): SearchProvider | null {
+  const text = String(value || 'auto').trim().toLowerCase()
+  if (text === 'auto' || text === 'duckduckgo' || text === 'searxng' || text === 'wikipedia') return text
+  return null
+}
+
 export class WebSearchTool implements ITool {
   private getConfig?: () => AppConfig
 
@@ -115,32 +121,32 @@ export class WebSearchTool implements ITool {
 
   definition: ToolDefinition = {
     name: 'web_search',
-    description: '联网搜索公开网页信息，支持多源检索和失败重试，返回相关标题和链接。',
+    description: 'Search public web content with multi-provider fallback.',
     parameters: {
       query: {
         type: 'string',
-        description: '搜索关键词',
+        description: 'Search query',
       },
       provider: {
         type: 'string',
-        description: '搜索源：auto/duckduckgo/searxng/wikipedia，默认 auto',
+        description: 'Search provider: auto/duckduckgo/searxng/wikipedia. Default auto',
         enum: ['auto', 'duckduckgo', 'searxng', 'wikipedia'],
       },
       searxngBaseUrl: {
         type: 'string',
-        description: '当 provider=searxng 时使用，例如 https://searx.example.com',
+        description: 'Required when provider=searxng, e.g. https://searx.example.com',
       },
       maxResults: {
         type: 'number',
-        description: '返回结果数量，默认 5，最大 10',
+        description: 'Result count, default 5, max 10',
       },
       timeoutMs: {
         type: 'number',
-        description: '单次请求超时时间，默认 8000ms',
+        description: 'Per-request timeout, default 8000ms',
       },
       retries: {
         type: 'number',
-        description: '失败重试次数，默认 1',
+        description: 'Retry count, default 1',
       },
     },
     required: ['query'],
@@ -149,19 +155,31 @@ export class WebSearchTool implements ITool {
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
     const query = String(args.query || '').trim()
     if (!query) {
-      return { toolCallId: '', content: '缺少 query 参数', isError: true }
+      return { toolCallId: '', content: 'Missing required parameter: query', isError: true }
     }
 
-    const provider = (String(args.provider || 'auto').toLowerCase() as SearchProvider) || 'auto'
+    const provider = normalizeProvider(args.provider)
+    if (!provider) {
+      return { toolCallId: '', content: 'Invalid provider. Use auto/duckduckgo/searxng/wikipedia', isError: true }
+    }
+
     const searxngBaseUrl = String(args.searxngBaseUrl || '').trim().replace(/\/+$/, '')
     const maxResults = Math.min(10, Math.max(1, Number(args.maxResults || 5)))
     const timeoutMs = Math.min(20000, Math.max(1000, Number(args.timeoutMs || 8000)))
     const retries = Math.min(3, Math.max(0, Number(args.retries || 1)))
 
+    if (provider === 'searxng' && !searxngBaseUrl) {
+      return { toolCallId: '', content: 'provider=searxng requires searxngBaseUrl', isError: true }
+    }
+
     const providers: SearchProvider[] =
       provider === 'auto'
         ? [searxngBaseUrl ? 'searxng' : 'duckduckgo', 'wikipedia']
-        : [provider]
+        : provider === 'duckduckgo'
+          ? ['duckduckgo', 'wikipedia']
+          : provider === 'searxng'
+            ? ['searxng', 'wikipedia']
+            : ['wikipedia']
 
     try {
       let finalItems: Array<{ title: string; url: string; snippet: string }> = []
@@ -205,7 +223,7 @@ export class WebSearchTool implements ITool {
             }
           } else if (p === 'searxng') {
             if (!searxngBaseUrl) {
-              throw new Error('provider=searxng 需要 searxngBaseUrl')
+              throw new Error('provider=searxng requires searxngBaseUrl')
             }
             const endpoint = `${searxngBaseUrl}/search?q=${encodeURIComponent(query)}&format=json&language=zh-CN`
             const payload = await fetchJsonWithRetry<SearxngResponse>(endpoint, timeoutMs, retries)
@@ -228,10 +246,8 @@ export class WebSearchTool implements ITool {
       }
 
       if (!finalItems.length) {
-        if (lastError) {
-          return { toolCallId: '', content: `网络搜索失败: ${lastError}`, isError: true }
-        }
-        return { toolCallId: '', content: `未找到与“${query}”相关的公开结果。` }
+        if (lastError) return { toolCallId: '', content: `Web search failed: ${lastError}`, isError: true }
+        return { toolCallId: '', content: `No public results found for "${query}".` }
       }
 
       const config = this.getConfig?.()
@@ -239,21 +255,18 @@ export class WebSearchTool implements ITool {
       const blockDomains = normalizeDomainList(config?.webSearch?.blockDomains || [])
       const filteredItems = finalItems.filter((item) => domainAllowed(item.url, allowDomains, blockDomains))
       if (!filteredItems.length) {
-        return { toolCallId: '', content: '搜索结果已被域名过滤规则全部拦截。', isError: true }
+        return { toolCallId: '', content: 'All search results were blocked by domain rules.', isError: true }
       }
 
       const content = filteredItems
         .slice(0, maxResults)
-        .map(
-          (item, index) =>
-            `${index + 1}. ${item.title}\n${item.url}${item.snippet ? `\n摘要: ${item.snippet}` : ''}`
-        )
+        .map((item, index) => `${index + 1}. ${item.title}\n${item.url}${item.snippet ? `\nSnippet: ${item.snippet}` : ''}`)
         .join('\n\n')
-      return { toolCallId: '', content: `[来源: ${usedProvider || provider}] ${content}` }
+      return { toolCallId: '', content: `[source: ${usedProvider || provider}] ${content}` }
     } catch (error) {
       return {
         toolCallId: '',
-        content: `网络搜索失败: ${error instanceof Error ? error.message : String(error)}`,
+        content: `Web search failed: ${error instanceof Error ? error.message : String(error)}`,
         isError: true,
       }
     }
