@@ -286,6 +286,9 @@
           <el-form-item label="显示/隐藏 Live2D">
             <el-input v-model="configStore.config.hotkeys.toggleLive2D" />
           </el-form-item>
+          <el-form-item label="显示/隐藏 Live2D 功能按钮">
+            <el-input v-model="configStore.config.hotkeys.toggleLive2DControls" />
+          </el-form-item>
           <el-form-item>
             <el-button type="primary" @click="saveHotkeys">保存</el-button>
             <el-text type="success" style="margin-left: 8px">保存后立即生效（若系统占用会自动回退）</el-text>
@@ -424,9 +427,6 @@
 
       <el-tab-pane label="唤起提示词" name="trigger">
         <el-form label-width="180px" style="max-width: 860px">
-          <el-form-item label="快捷键唤起">
-            <el-input v-model="configStore.config.triggerPrompts.hotkey" type="textarea" :rows="2" />
-          </el-form-item>
           <el-form-item label="点击形象唤起">
             <el-input v-model="configStore.config.triggerPrompts.click_avatar" type="textarea" :rows="2" />
           </el-form-item>
@@ -576,10 +576,49 @@ function syncModelAssignmentsFromConfig() {
   }
 }
 
+function buildModelAssignmentsPayload() {
+  const next = {} as Record<TaskType, { apiConfigId: string; model: string }>
+  const errors: string[] = []
+  for (const key of Object.keys(modelAssignmentForm) as TaskType[]) {
+    const label = taskTypeLabels[key]
+    const apiConfigId = String(modelAssignmentForm[key].apiConfigId || '').trim()
+    let model = String(modelAssignmentForm[key].model || '').trim()
+    if (!apiConfigId && model) {
+      errors.push(`${label} 已填写模型名称，但未选择 API。`)
+    }
+    if (apiConfigId) {
+      const api = configStore.apiConfigs.find((item) => item.id === apiConfigId)
+      if (!api) {
+        errors.push(`${label} 绑定的 API 不存在，请重新选择。`)
+      } else if (!model) {
+        model = String(api.defaultModel || '').trim()
+      }
+      if (!model) {
+        errors.push(`${label} 未配置模型，且所选 API 没有默认模型。`)
+      }
+    }
+    next[key] = { apiConfigId, model }
+  }
+  return { next, errors }
+}
+
 async function saveModelAssignments() {
-  const next = { ...modelAssignmentForm }
-  await configStore.setConfig('modelAssignments', next)
-  ElMessage.success('模型分配已保存')
+  if (configStore.apiConfigs.length === 0) {
+    ElMessage.warning('请先新增至少一个 API 配置，再保存模型分配。')
+    return
+  }
+  const { next, errors } = buildModelAssignmentsPayload()
+  if (errors.length > 0) {
+    ElMessage.error(errors[0])
+    return
+  }
+  try {
+    await configStore.setConfig('modelAssignments', next)
+    syncModelAssignmentsFromConfig()
+    ElMessage.success('模型分配已保存')
+  } catch (error) {
+    ElMessage.error(`模型分配保存失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 function openApiDialogForCreate() {
@@ -595,14 +634,35 @@ function openApiDialogForEdit(api: ApiConfig) {
 }
 
 async function saveApi() {
-  if (!apiForm.name || !apiForm.baseUrl || !apiForm.apiKey || !apiForm.defaultModel) return
-  if (editingApi.value) {
-    await configStore.updateApiConfig({ ...apiForm })
-  } else {
-    await configStore.addApiConfig({ ...apiForm, id: uuidv4() })
+  const name = String(apiForm.name || '').trim()
+  const baseUrl = String(apiForm.baseUrl || '').trim()
+  const apiKey = String(apiForm.apiKey || '').trim()
+  const defaultModel = String(apiForm.defaultModel || '').trim()
+  if (!name || !baseUrl || !apiKey || !defaultModel) {
+    ElMessage.warning('请完整填写 API 配置（名称、接口地址、API Key、默认模型）。')
+    return
   }
-  showApiDialog.value = false
-  ElMessage.success('API 配置已保存')
+  const payload: ApiConfig = {
+    id: editingApi.value ? String(apiForm.id || '') : uuidv4(),
+    name,
+    baseUrl,
+    apiKey,
+    defaultModel,
+    availableModels: Array.isArray(apiForm.availableModels)
+      ? apiForm.availableModels.map((item) => String(item).trim()).filter(Boolean)
+      : [],
+  }
+  try {
+    if (editingApi.value) {
+      await configStore.updateApiConfig(payload)
+    } else {
+      await configStore.addApiConfig(payload)
+    }
+    showApiDialog.value = false
+    ElMessage.success('API 配置已保存')
+  } catch (error) {
+    ElMessage.error(`API 配置保存失败：${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 async function deleteApi(id: string) {
@@ -807,7 +867,7 @@ async function saveHotkeys() {
     ...configStore.config.hotkeys,
   })) as
     | {
-        applied?: { toggleChat: string; toggleLive2D: string }
+        applied?: { toggleChat: string; toggleLive2D: string; toggleLive2DControls: string }
         warnings?: string[]
       }
     | undefined
@@ -823,7 +883,12 @@ async function saveHotkeys() {
 }
 
 async function saveTriggerPrompts() {
-  await configStore.setConfig('triggerPrompts', { ...configStore.config.triggerPrompts })
+  await configStore.setConfig('triggerPrompts', {
+    click_avatar: String(configStore.config.triggerPrompts.click_avatar || ''),
+    random_timer: String(configStore.config.triggerPrompts.random_timer || ''),
+    file_change: String(configStore.config.triggerPrompts.file_change || ''),
+    text_input: String(configStore.config.triggerPrompts.text_input || ''),
+  })
   await configStore.setConfig('randomTimerRange', { ...configStore.config.randomTimerRange })
   ElMessage.success('唤起提示词已保存')
 }

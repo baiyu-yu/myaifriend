@@ -22,11 +22,11 @@ export const DEFAULT_CONFIG: AppConfig = {
   hotkeys: {
     toggleChat: 'CommandOrControl+Shift+A',
     toggleLive2D: 'CommandOrControl+Shift+L',
+    toggleLive2DControls: 'CommandOrControl+Shift+H',
   },
   watchFolders: [],
   randomTimerRange: { min: 30, max: 120 },
   triggerPrompts: {
-    hotkey: '用户通过快捷键唤起了你，请简短问候并询问需求。',
     click_avatar: '用户点击了你的形象，请给出自然、简短的回应。',
     random_timer: '请主动发起一段轻量对话，可以是提醒、建议或简短闲聊。',
     file_change: '监听目录发生文件变动：{{fileChangeInfo}}。请告知用户并询问是否需要处理。',
@@ -39,6 +39,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   live2dModelActionMaps: {},
   live2dModels: [],
+  live2dModelTransforms: {},
   live2dBehavior: {
     enableIdleSway: true,
     idleSwayAmplitude: 8,

@@ -132,7 +132,9 @@ let modelDragOffsetY = 0
 let controlDragOffsetX = 0
 let controlDragOffsetY = 0
 let controlSaveTimer: ReturnType<typeof setTimeout> | null = null
+let modelTransformSaveTimer: ReturnType<typeof setTimeout> | null = null
 let modelTransformCustomized = false
+let currentModelPath = ''
 let lastScaleLogAt = 0
 let lastInteractionState = ''
 let mousePassthroughEnabled = false
@@ -236,6 +238,87 @@ function queuePersistControls(reason: string) {
         logLive2D('warn', `Live2D 功能按钮位置保存失败: reason=${reason} | ${describeError(error)}`)
       })
   }, 180)
+}
+
+function normalizeModelTransformKey(modelPath: string): string {
+  return String(modelPath || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .toLowerCase()
+}
+
+function sanitizeModelTransform(input: any): { x: number; y: number; scale: number } | null {
+  const x = Number(input?.x)
+  const y = Number(input?.y)
+  const scale = Number(input?.scale)
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(scale)) return null
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    scale: Math.min(6, Math.max(0.05, scale)),
+  }
+}
+
+function resolveSavedModelTransform(modelPath: string): { x: number; y: number; scale: number } | null {
+  const map = configStore.config.live2dModelTransforms || {}
+  const normalized = normalizeModelTransformKey(modelPath)
+  const raw = map[normalized] ?? map[modelPath]
+  return sanitizeModelTransform(raw)
+}
+
+function applySavedModelTransform(model: Live2DModelType, transform: { x: number; y: number; scale: number }, reason: string) {
+  model.anchor.set(0.5, 1)
+  model.scale.set(transform.scale)
+  model.x = transform.x
+  model.y = transform.y
+  baseX = model.x
+  baseY = model.y
+  baseRotation = model.rotation
+  modelTransformCustomized = true
+  clampModelWithinViewport()
+  logLive2D(
+    'info',
+    `Live2D 模型布局恢复: reason=${reason}, scale=${transform.scale.toFixed(3)}, pos=(${transform.x.toFixed(1)},${transform.y.toFixed(1)})`
+  )
+}
+
+function queuePersistModelTransform(reason: string) {
+  if (!currentModel || !currentModelPath) return
+  if (modelTransformSaveTimer) {
+    clearTimeout(modelTransformSaveTimer)
+  }
+  modelTransformSaveTimer = setTimeout(() => {
+    modelTransformSaveTimer = null
+    if (!currentModel || !currentModelPath) return
+    const key = normalizeModelTransformKey(currentModelPath)
+    if (!key) return
+    const scale = Number(currentModel.scale.x) || 1
+    const payload = {
+      x: Math.round(baseX),
+      y: Math.round(baseY),
+      scale: Math.min(6, Math.max(0.05, scale)),
+    }
+    const map = configStore.config.live2dModelTransforms || {}
+    const prev = sanitizeModelTransform(map[key])
+    if (prev && prev.x === payload.x && prev.y === payload.y && Math.abs(prev.scale - payload.scale) < 0.0005) {
+      return
+    }
+    const nextMap = {
+      ...map,
+      [key]: payload,
+    }
+    void configStore
+      .setConfig('live2dModelTransforms', nextMap)
+      .then(() => {
+        logLive2D(
+          'info',
+          `Live2D 模型布局已保存: reason=${reason}, model=${currentModelPath}, scale=${payload.scale.toFixed(3)}, pos=(${payload.x},${payload.y})`
+        )
+      })
+      .catch((error) => {
+        logLive2D('warn', `Live2D 模型布局保存失败: reason=${reason}, model=${currentModelPath} | ${describeError(error)}`)
+      })
+  }, 240)
 }
 
 function syncActionOptionsFromConfig() {
@@ -667,6 +750,7 @@ async function loadModel(modelPath: string) {
 
   try {
     destroyCurrentModelSafely('loadModel')
+    currentModelPath = modelPath
 
     let model: Live2DModelType | null = null
     const attemptErrors: string[] = []
@@ -699,7 +783,12 @@ async function loadModel(modelPath: string) {
     pixiApp.stage.addChild(model as any)
     modelTransformCustomized = false
     await ensureRuntimeActionManagers(model, modelPath)
-    fitModelWithRetry(model)
+    const savedTransform = resolveSavedModelTransform(modelPath)
+    if (savedTransform) {
+      applySavedModelTransform(model, savedTransform, 'saved-transform')
+    } else {
+      fitModelWithRetry(model)
+    }
     await playInitialMotion(model)
     const textureCount = Array.isArray((model as any).textures) ? (model as any).textures.length : 0
     const actionSnapshot = collectModelActionDebugSnapshot()
@@ -1112,6 +1201,7 @@ function handleResize() {
   if (currentModel) {
     if (modelTransformCustomized) {
       clampModelWithinViewport()
+      queuePersistModelTransform('resize')
     } else {
       fitModel(currentModel, 'resize')
     }
@@ -1138,6 +1228,7 @@ function handleMouseMove(event: MouseEvent) {
   if (!rect) return
   if (modelDragging && event.buttons === 0) {
     modelDragging = false
+    queuePersistModelTransform('drag-release')
   }
   lastPointerX = event.clientX
   lastPointerY = event.clientY
@@ -1189,6 +1280,7 @@ function handleMouseUp(event: MouseEvent) {
   }
   if (modelDragging) {
     modelDragging = false
+    queuePersistModelTransform('drag-end')
   }
   updateMousePassthrough(event.clientX, event.clientY, event.target)
 }
@@ -1217,6 +1309,7 @@ function handleModelWheel(event: WheelEvent) {
   currentModel.scale.set(nextScale)
   modelTransformCustomized = true
   clampModelWithinViewport()
+  queuePersistModelTransform('wheel-scale')
   setMousePassthrough(false)
   const now = Date.now()
   if (now - lastScaleLogAt > 320) {
@@ -1281,6 +1374,9 @@ async function triggerMotionManually() {
 }
 
 function handleWindowBlur() {
+  if (modelDragging) {
+    queuePersistModelTransform('window-blur')
+  }
   modelDragging = false
   if (controlDragging.value) {
     controlDragging.value = false
@@ -1424,6 +1520,7 @@ onBeforeUnmount(() => {
   setMousePassthrough(false)
 
   if (controlSaveTimer) clearTimeout(controlSaveTimer)
+  if (modelTransformSaveTimer) clearTimeout(modelTransformSaveTimer)
   if (replyTimer) clearTimeout(replyTimer)
 })
 </script>

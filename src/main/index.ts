@@ -436,12 +436,19 @@ class Application {
     this.tray.on('double-click', () => this.openMainRoute('settings'))
   }
 
-  private registerGlobalShortcuts(): { applied: { toggleChat: string; toggleLive2D: string }; warnings: string[] } {
+  private registerGlobalShortcuts(): {
+    applied: { toggleChat: string; toggleLive2D: string; toggleLive2DControls: string }
+    warnings: string[]
+  } {
     const config = this.configManager.getAll()
     globalShortcut.unregisterAll()
 
     const chatHotkey = this.normalizeHotkey(config.hotkeys.toggleChat, 'CommandOrControl+Shift+A')
     const live2dHotkey = this.normalizeHotkey(config.hotkeys.toggleLive2D, 'CommandOrControl+Shift+L')
+    const controlsHotkey = this.normalizeHotkey(
+      config.hotkeys.toggleLive2DControls,
+      'CommandOrControl+Shift+H'
+    )
 
     const chatHandler = () => {
       this.toggleChatWindow()
@@ -455,7 +462,7 @@ class Application {
       live2dHandler
     )
     const controlsResult = this.registerShortcutWithFallback(
-      'CommandOrControl+Shift+H',
+      controlsHotkey,
       'CommandOrControl+Shift+H',
       () => this.toggleLive2DControlsVisible('shortcut')
     )
@@ -463,6 +470,7 @@ class Application {
     const applied = {
       toggleChat: chatResult.applied || 'CommandOrControl+Shift+A',
       toggleLive2D: live2dResult.applied || 'CommandOrControl+Shift+L',
+      toggleLive2DControls: controlsResult.applied || 'CommandOrControl+Shift+H',
     }
     return { applied, warnings: [...chatResult.warnings, ...live2dResult.warnings, ...controlsResult.warnings] }
   }
@@ -1090,7 +1098,10 @@ class Application {
       }
       this.configManager.set(key, nextValue)
       let hotkeyResult:
-        | { applied: { toggleChat: string; toggleLive2D: string }; warnings: string[] }
+        | {
+            applied: { toggleChat: string; toggleLive2D: string; toggleLive2DControls: string }
+            warnings: string[]
+          }
         | undefined
       if (key === 'live2dModelPath' && typeof value === 'string') {
         const modelPath = String(nextValue || '')

@@ -107,7 +107,6 @@ export interface ToolResult {
 
 // --- Trigger ---
 export type InvokeTrigger =
-  | 'hotkey'
   | 'click_avatar'
   | 'random_timer'
   | 'file_change'
@@ -160,6 +159,7 @@ export interface AppConfig {
   hotkeys: {
     toggleChat: string
     toggleLive2D: string
+    toggleLive2DControls: string
   }
   watchFolders: string[]
   randomTimerRange: { min: number; max: number }
@@ -168,6 +168,7 @@ export interface AppConfig {
   live2dActionMap: Live2DActionMap
   live2dModelActionMaps: Record<string, Live2DActionMap>
   live2dModels: Live2DModelRecord[]
+  live2dModelTransforms: Record<string, { x: number; y: number; scale: number }>
   live2dBehavior: {
     enableIdleSway: boolean
     idleSwayAmplitude: number
