@@ -24,9 +24,6 @@
         <button type="button" class="create-context-btn" @click="createConversation">+</button>
         <button type="button" @click="clearConversation">清空上下文</button>
       </div>
-      <div v-if="replyText" ref="replyBubbleRef" class="dialog-output" @click.stop>
-        <div class="reply-content">{{ replyText }}</div>
-      </div>
       <div class="dialog-input">
         <input
           v-model="chatInput"
@@ -37,6 +34,9 @@
         <button type="button" :disabled="chatStore.isLoading || !chatInput.trim()" @click="sendChat">
           {{ chatStore.isLoading ? '发送中' : '发送' }}
         </button>
+      </div>
+      <div v-if="replyText" ref="replyBubbleRef" class="dialog-output" @click.stop>
+        <div class="reply-content">{{ replyText }}</div>
       </div>
     </div>
 
@@ -137,7 +137,6 @@ const cleanups: Array<() => void> = []
 
 let pixiApp: PIXI.Application | null = null
 let currentModel: Live2DModelType | null = null
-let replyTimer: ReturnType<typeof setTimeout> | null = null
 let replyTypeTimer: ReturnType<typeof setInterval> | null = null
 let lastTypedMessageKey = ''
 let idleTicker: ((delta: number) => void) | null = null
@@ -1221,14 +1220,8 @@ function typewriteReply(text: string) {
 }
 
 function showReply(text: string) {
-  if (replyTimer) clearTimeout(replyTimer)
   typewriteReply(text)
   syncDialogAndReplyPosition('show-reply')
-  const keepMs = Math.max(9000, Math.min(24000, 5200 + Math.round(String(text || '').length * 72)))
-  replyTimer = setTimeout(() => {
-    replyText.value = ''
-    syncDialogAndReplyPosition('hide-reply')
-  }, keepMs)
 }
 
 function syncDialogAndReplyPosition(reason = 'manual') {
@@ -1704,7 +1697,6 @@ onBeforeUnmount(() => {
 
   if (controlSaveTimer) clearTimeout(controlSaveTimer)
   if (modelTransformSaveTimer) clearTimeout(modelTransformSaveTimer)
-  if (replyTimer) clearTimeout(replyTimer)
   if (replyTypeTimer) clearInterval(replyTypeTimer)
 })
 </script>
