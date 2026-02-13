@@ -20,7 +20,6 @@
       @mousedown.stop
     >
       <div class="control-toolbar" @mousedown.stop.prevent="startControlDrag">
-        <span class="control-drag-label">拖动</span>
         <div class="control-toolbar-actions">
           <button type="button" class="control-toggle-btn" @click.stop="toggleControlPanel">
             {{ showControlPanel ? '收起' : '动作' }}
@@ -55,10 +54,14 @@
       :class="{ dragging: controlDragging }"
       :style="controlWidgetStyle"
       @click.stop
-      @mousedown.stop
+      @mousedown.stop.prevent="startControlDrag"
     >
-      <span class="control-restore-drag" @mousedown.stop.prevent="startControlDrag">拖动</span>
-      <button type="button" class="control-show-btn" @click.stop="toggleControlButtonsVisible(true)">
+      <button
+        type="button"
+        class="control-show-btn"
+        @mousedown.stop
+        @click.stop="toggleControlButtonsVisible(true)"
+      >
         显示按钮
       </button>
     </div>
@@ -104,6 +107,7 @@ let baseY = 0
 let baseRotation = 0
 let swayTime = 0
 let live2DModelCtor: typeof import('pixi-live2d-display/cubism4').Live2DModel | null = null
+let cubism4Module: typeof import('pixi-live2d-display/cubism4') | null = null
 let motionPriorityNormal = 2
 let motionPriorityForce = 3
 const runtimeScriptTasks = new Map<string, Promise<boolean>>()
@@ -383,6 +387,7 @@ async function ensureLive2DRuntime(): Promise<boolean> {
 
   try {
     const module = await import('pixi-live2d-display/cubism4')
+    cubism4Module = module
     live2DModelCtor = module.Live2DModel
     motionPriorityNormal = module.MotionPriority.NORMAL
     motionPriorityForce = module.MotionPriority.FORCE
@@ -420,6 +425,158 @@ function toModelUrls(inputPath: string): string[] {
   const legacy = /^[a-zA-Z]:\//.test(normalized) ? `file:///${normalized}` : `file://${normalized}`
   const escapedLegacy = encodeURI(legacy).replace(/#/g, '%23').replace(/\?/g, '%3F')
   return Array.from(new Set([toFileUrl(normalized), legacy, escapedLegacy]))
+}
+
+type RuntimeExpressionDef = { Name: string; File: string }
+type RuntimeMotionDef = { File: string }
+
+function parseFileListContent(content: string): string[] {
+  const lines = content.split(/\r?\n/)
+  const result: string[] = []
+  const dirStack: string[] = []
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd()
+    if (!line) continue
+    const indentLength = rawLine.match(/^(\s*)/)?.[1]?.length || 0
+    const depth = Math.floor(indentLength / 2)
+    const dirMatch = line.match(/^\[DIR\]\s+(.+?)\/$/)
+    if (dirMatch) {
+      dirStack.length = depth
+      dirStack[depth] = dirMatch[1]
+      continue
+    }
+    if (!line.startsWith('[FILE] ')) continue
+    const filePart = line.slice(7)
+    const marker = filePart.lastIndexOf(' (')
+    const fileName = (marker >= 0 ? filePart.slice(0, marker) : filePart).trim()
+    if (!fileName) continue
+    const segments = [...dirStack.slice(0, depth).filter(Boolean), fileName]
+    result.push(segments.join('/'))
+  }
+
+  return result
+}
+
+async function discoverRuntimeActionDefinitions(modelPath: string): Promise<{
+  expressions: RuntimeExpressionDef[]
+  motions: Record<string, RuntimeMotionDef[]>
+}> {
+  const modelDir = modelPath.trim().replace(/\\/g, '/').replace(/\/[^/]+$/, '')
+  if (!modelDir) {
+    return { expressions: [], motions: {} }
+  }
+
+  try {
+    const result = await window.electronAPI.file.list(modelDir, true)
+    const content = typeof result?.content === 'string' ? result.content : ''
+    if (!content || result?.isError) {
+      logLive2D(
+        'warn',
+        `Live2D 动作定义扫描失败: dir=${modelDir}, isError=${Boolean(result?.isError)}, detail=${content || 'empty'}`
+      )
+      return { expressions: [], motions: {} }
+    }
+
+    const files = parseFileListContent(content)
+    const expressionMap = new Map<string, RuntimeExpressionDef>()
+    const motionList: RuntimeMotionDef[] = []
+    for (const relativePath of files) {
+      const normalized = relativePath.replace(/\\/g, '/')
+      const fileName = normalized.split('/').pop() || normalized
+      if (/\.exp3\.json$/i.test(fileName)) {
+        const name = fileName.replace(/\.exp3\.json$/i, '')
+        if (!expressionMap.has(name)) {
+          expressionMap.set(name, { Name: name, File: normalized })
+        }
+      }
+      if (/\.(motion3\.json|mtn)$/i.test(fileName)) {
+        motionList.push({ File: normalized })
+      }
+    }
+    const expressions = Array.from(expressionMap.values())
+    const motions: Record<string, RuntimeMotionDef[]> = {}
+    if (motionList.length > 0) {
+      motions.Auto = motionList
+    }
+
+    logLive2D(
+      'info',
+      `Live2D 动作定义扫描完成: dir=${modelDir}, expression=${expressions.length}, motion=${motionList.length}, expSample=${expressions
+        .slice(0, 6)
+        .map((item) => item.Name)
+        .join(', ') || '无'}`
+    )
+    return { expressions, motions }
+  } catch (error) {
+    logLive2D('warn', `Live2D 动作定义扫描异常: dir=${modelDir} | ${describeError(error)}`)
+    return { expressions: [], motions: {} }
+  }
+}
+
+async function ensureRuntimeActionManagers(model: Live2DModelType, modelPath: string): Promise<void> {
+  const internal = (model as any)?.internalModel
+  const motionManager = internal?.motionManager
+  const settings = internal?.settings
+  if (!internal || !motionManager || !settings) {
+    logLive2D('warn', 'Live2D 动作定义补齐跳过: internal/motionManager/settings 不完整')
+    return
+  }
+
+  const hasExpressionManager = Boolean(motionManager.expressionManager)
+  const hasExpressionDefs = Array.isArray(settings.expressions) && settings.expressions.length > 0
+  const hasMotionDefs = settings.motions && typeof settings.motions === 'object' && Object.keys(settings.motions).length > 0
+  if (hasExpressionManager && hasExpressionDefs && hasMotionDefs) return
+
+  const discovered = await discoverRuntimeActionDefinitions(modelPath)
+  const patchedParts: string[] = []
+
+  if (!hasExpressionDefs && discovered.expressions.length > 0) {
+    settings.expressions = discovered.expressions
+    patchedParts.push(`expressions=${discovered.expressions.length}`)
+  }
+  if (!hasMotionDefs && Object.keys(discovered.motions).length > 0) {
+    settings.motions = discovered.motions
+    patchedParts.push(
+      `motions=${Object.values(discovered.motions).reduce((sum: number, list: RuntimeMotionDef[]) => sum + list.length, 0)}`
+    )
+  }
+
+  if (!motionManager.expressionManager && Array.isArray(settings.expressions) && settings.expressions.length > 0) {
+    const expressionManagerCtor = (cubism4Module as any)?.Cubism4ExpressionManager
+    if (typeof expressionManagerCtor === 'function') {
+      motionManager.expressionManager = new expressionManagerCtor(settings, {})
+      patchedParts.push('expressionManager=created')
+    } else {
+      logLive2D('warn', 'Live2D 动作定义补齐失败: Cubism4ExpressionManager 不可用')
+    }
+  }
+
+  if (motionManager.expressionManager && Array.isArray(settings.expressions)) {
+    motionManager.expressionManager.definitions = settings.expressions
+    if (!Array.isArray(motionManager.expressionManager.expressions)) {
+      motionManager.expressionManager.expressions = []
+    }
+  }
+
+  if (settings.motions && typeof settings.motions === 'object') {
+    motionManager.definitions = settings.motions
+    motionManager.motionGroups = motionManager.motionGroups || {}
+    for (const groupName of Object.keys(settings.motions)) {
+      if (!Array.isArray(motionManager.motionGroups[groupName])) {
+        motionManager.motionGroups[groupName] = []
+      }
+    }
+  }
+
+  if (patchedParts.length > 0) {
+    logLive2D('info', `Live2D 动作定义补齐完成: ${patchedParts.join(', ')}`)
+  } else {
+    logLive2D(
+      'warn',
+      `Live2D 动作定义未补齐: expressionDefs=${Array.isArray(settings.expressions) ? settings.expressions.length : 0}, motionGroups=${Object.keys(settings.motions || {}).length}`
+    )
+  }
 }
 
 function resolveModelSize(model: Live2DModelType): { width: number; height: number } {
@@ -541,6 +698,7 @@ async function loadModel(modelPath: string) {
     model.interactive = true
     pixiApp.stage.addChild(model as any)
     modelTransformCustomized = false
+    await ensureRuntimeActionManagers(model, modelPath)
     fitModelWithRetry(model)
     await playInitialMotion(model)
     const textureCount = Array.isArray((model as any).textures) ? (model as any).textures.length : 0
@@ -1337,11 +1495,6 @@ canvas {
   user-select: none;
 }
 
-.control-drag-label {
-  font-size: 12px;
-  color: #475569;
-}
-
 .control-toolbar-actions {
   display: flex;
   align-items: center;
@@ -1398,13 +1551,6 @@ canvas {
 
 .control-restore.dragging {
   opacity: 0.92;
-}
-
-.control-restore-drag {
-  font-size: 12px;
-  color: #475569;
-  cursor: move;
-  user-select: none;
 }
 
 .control-row {

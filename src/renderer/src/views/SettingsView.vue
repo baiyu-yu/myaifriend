@@ -183,6 +183,9 @@
           <el-form-item label="窗口模式">
             <el-text type="info">Live2D 窗口为全屏透明覆盖层，功能按钮支持拖动定位；非模型/对话框/按钮区域自动点击穿透。</el-text>
           </el-form-item>
+          <el-form-item label="功能按钮快捷键">
+            <el-text type="info">按 <code>Ctrl+Shift+H</code>（macOS 为 <code>Command+Shift+H</code>）可快速隐藏/显示功能按钮。</el-text>
+          </el-form-item>
           <el-form-item>
             <el-button type="primary" @click="saveLive2DConfig">保存模型与行为设置</el-button>
           </el-form-item>

@@ -35,6 +35,7 @@ class Application {
 
   private randomTimer: NodeJS.Timeout | null = null
   private persistWindowTimer: NodeJS.Timeout | null = null
+  private live2dTopmostTimer: NodeJS.Timeout | null = null
   private isQuitting = false
   private runtimeLogs: AppLogEntry[] = []
   private storageMetaPath = ''
@@ -192,6 +193,7 @@ class Application {
       this.fileWatcher.stopAll()
       if (this.randomTimer) clearTimeout(this.randomTimer)
       if (this.persistWindowTimer) clearTimeout(this.persistWindowTimer)
+      if (this.live2dTopmostTimer) clearInterval(this.live2dTopmostTimer)
     })
   }
 
@@ -322,8 +324,21 @@ class Application {
     })
     this.live2dWindow.setMinimumSize(bounds.width, bounds.height)
     this.live2dWindow.setMaximumSize(bounds.width, bounds.height)
+    this.enforceLive2DOnTop(`sync-${reason}`)
     if (reason !== 'init') {
       this.addRuntimeLog('info', `Live2D 窗口已固定全屏: reason=${reason}, size=${bounds.width}x${bounds.height}`, 'live2d')
+    }
+  }
+
+  private enforceLive2DOnTop(reason: string) {
+    const win = this.live2dWindow
+    if (!win || win.isDestroyed()) return
+    try {
+      win.setAlwaysOnTop(true, 'screen-saver', 1)
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+      win.moveTop()
+    } catch (error) {
+      this.addRuntimeLog('warn', `Live2D 置顶强化失败: reason=${reason} | ${this.describeError(error)}`, 'live2d')
     }
   }
 
@@ -360,11 +375,21 @@ class Application {
     })
 
     this.syncLive2DWindowBounds('init')
+    this.enforceLive2DOnTop('init')
     this.live2dWindow.setIgnoreMouseEvents(true, { forward: true })
     const syncBounds = () => this.syncLive2DWindowBounds('display-metrics-changed')
     screen.on('display-added', syncBounds)
     screen.on('display-removed', syncBounds)
     screen.on('display-metrics-changed', syncBounds)
+    this.live2dWindow.on('show', () => this.enforceLive2DOnTop('show-event'))
+    this.live2dWindow.on('focus', () => this.enforceLive2DOnTop('focus-event'))
+
+    if (this.live2dTopmostTimer) clearInterval(this.live2dTopmostTimer)
+    this.live2dTopmostTimer = setInterval(() => {
+      if (this.live2dWindow?.isVisible()) {
+        this.enforceLive2DOnTop('heartbeat')
+      }
+    }, 1800)
 
     if (process.env.NODE_ENV === 'development') {
       this.live2dWindow.loadURL('http://localhost:5173/#/live2d')
@@ -390,6 +415,7 @@ class Application {
         this.addRuntimeLog('info', `Live2D 窗口初始化下发模型: ${modelPath}`, 'live2d')
         this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_LOAD_MODEL, modelPath)
       }
+      this.enforceLive2DOnTop('did-finish-load')
     })
   }
 
@@ -428,12 +454,17 @@ class Application {
       'CommandOrControl+Shift+L',
       live2dHandler
     )
+    const controlsResult = this.registerShortcutWithFallback(
+      'CommandOrControl+Shift+H',
+      'CommandOrControl+Shift+H',
+      () => this.toggleLive2DControlsVisible('shortcut')
+    )
 
     const applied = {
       toggleChat: chatResult.applied || 'CommandOrControl+Shift+A',
       toggleLive2D: live2dResult.applied || 'CommandOrControl+Shift+L',
     }
-    return { applied, warnings: [...chatResult.warnings, ...live2dResult.warnings] }
+    return { applied, warnings: [...chatResult.warnings, ...live2dResult.warnings, ...controlsResult.warnings] }
   }
 
   private toggleChatWindow() {
@@ -461,6 +492,7 @@ class Application {
     } else {
       this.syncLive2DWindowBounds('toggle-show')
       this.live2dWindow.show()
+      this.enforceLive2DOnTop('toggle-show')
       this.live2dWindow.setIgnoreMouseEvents(true, { forward: true })
     }
   }
@@ -471,7 +503,23 @@ class Application {
       this.live2dWindow.show()
     }
     this.syncLive2DWindowBounds('show')
+    this.enforceLive2DOnTop('show')
     this.live2dWindow.setIgnoreMouseEvents(true, { forward: true })
+  }
+
+  private toggleLive2DControlsVisible(source: string) {
+    const config = this.configManager.getAll()
+    const current = config.live2dControls || { visible: true, x: 16, y: 40 }
+    const next = {
+      ...current,
+      visible: !current.visible,
+    }
+    this.configManager.set('live2dControls', next)
+    this.live2dWindow?.webContents.send(IPC_CHANNELS.LIVE2D_CONTROLS_UPDATE, next)
+    this.addRuntimeLog('info', `Live2D 功能按钮可见性切换: source=${source}, visible=${next.visible}`, 'live2d')
+    if (this.live2dWindow?.isVisible()) {
+      this.enforceLive2DOnTop('toggle-controls')
+    }
   }
 
   private beginWindowDrag(sender: Electron.WebContents, x: number, y: number) {
