@@ -22,8 +22,8 @@ npm run mock:api
 然后把 `premier` / `tool_calling` / `code_generation`（以及你想测试的其他任务）切到这个 API。
 
 ## 支持的行为
-- 规划阶段：返回 workflow JSON。
-- 工具阶段：返回 `tool_calls`（会按指令匹配 `live2d_control` / `file_write` / `open_in_browser` 等）。
+- 规划阶段：始终返回固定的 `full_toolchain` workflow 任务。
+- 工具阶段：无论输入内容，都会一次性返回请求中所有工具的 `tool_calls`（每个工具调用一次）。
 - 工具回填阶段：根据 tool message 生成总结。
 - 视觉阶段：若请求里带 `image_url`，返回固定 mock 视觉文本。
 
@@ -37,4 +37,3 @@ npm run mock:api
 ```bash
 MOCK_EMPTY_TOOL_CALL_RATE=0.2 npm run mock:api
 ```
-
