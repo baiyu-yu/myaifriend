@@ -7,11 +7,18 @@
       @wheel.prevent="handleModelWheel"
     />
 
-    <div v-if="replyText" class="reply-bubble" @click.stop>
+    <div v-if="replyText" ref="replyBubbleRef" class="reply-bubble" :style="replyBubbleStyle" @click.stop>
       <div class="reply-content">{{ replyText }}</div>
     </div>
 
-    <div v-if="controlsState.visible" class="dialog-dock" @click.stop @mousedown.stop>
+    <div
+      v-if="controlsState.visible"
+      ref="dialogDockRef"
+      class="dialog-dock"
+      :style="dialogDockStyle"
+      @click.stop
+      @mousedown.stop
+    >
       <div class="dialog-actions">
         <select v-model="chatStore.activeConversationId" @change="switchConversation">
           <option v-for="item in chatStore.conversations" :key="item.id" :value="item.id">
@@ -83,6 +90,8 @@ import { useConfigStore } from '../stores/config'
 import { useChatStore } from '../stores/chat'
 
 const canvasRef = ref<HTMLCanvasElement>()
+const dialogDockRef = ref<HTMLDivElement>()
+const replyBubbleRef = ref<HTMLDivElement>()
 const replyText = ref('')
 const selectedExpression = ref('')
 const selectedMotion = ref('')
@@ -99,6 +108,24 @@ const controlDragging = ref(false)
 const controlWidgetStyle = computed(() => ({
   left: `${controlsState.value.x}px`,
   top: `${controlsState.value.y}px`,
+}))
+const dialogDockPosition = ref({
+  x: window.innerWidth / 2,
+  y: Math.max(12, window.innerHeight - 130),
+})
+const replyBubblePosition = ref({
+  x: window.innerWidth / 2,
+  y: Math.max(8, window.innerHeight - 240),
+})
+const dialogDockStyle = computed(() => ({
+  left: `${dialogDockPosition.value.x}px`,
+  top: `${dialogDockPosition.value.y}px`,
+  transform: 'translateX(-50%)',
+}))
+const replyBubbleStyle = computed(() => ({
+  left: `${replyBubblePosition.value.x}px`,
+  top: `${replyBubblePosition.value.y}px`,
+  transform: 'translateX(-50%)',
 }))
 
 const configStore = useConfigStore()
@@ -145,6 +172,7 @@ let modelTransformSaveTimer: ReturnType<typeof setTimeout> | null = null
 let modelTransformCustomized = false
 let currentModelPath = ''
 let lastScaleLogAt = 0
+let lastOverlaySyncAt = 0
 let lastInteractionState = ''
 let mousePassthroughEnabled = false
 
@@ -220,6 +248,7 @@ function applyControls(input: any, source: string) {
   if (!next.visible) {
     showControlPanel.value = false
   }
+  syncDialogAndReplyPosition(`controls-${source}`)
   if (prev.visible !== next.visible || prev.x !== next.x || prev.y !== next.y) {
     logLive2D(
       'info',
@@ -798,6 +827,7 @@ async function loadModel(modelPath: string) {
     } else {
       fitModelWithRetry(model)
     }
+    syncDialogAndReplyPosition('model-ready')
     await playInitialMotion(model)
     const textureCount = Array.isArray((model as any).textures) ? (model as any).textures.length : 0
     const actionSnapshot = collectModelActionDebugSnapshot()
@@ -1173,6 +1203,7 @@ function typewriteReply(text: string) {
   replyTypeTimer = setInterval(() => {
     cursor = Math.min(content.length, cursor + step)
     replyText.value = content.slice(0, cursor)
+    syncDialogAndReplyPosition('typewrite')
     if (cursor >= content.length && replyTypeTimer) {
       clearInterval(replyTypeTimer)
       replyTypeTimer = null
@@ -1183,9 +1214,55 @@ function typewriteReply(text: string) {
 function showReply(text: string) {
   if (replyTimer) clearTimeout(replyTimer)
   typewriteReply(text)
+  syncDialogAndReplyPosition('show-reply')
   replyTimer = setTimeout(() => {
     replyText.value = ''
+    syncDialogAndReplyPosition('hide-reply')
   }, 10000)
+}
+
+function syncDialogAndReplyPosition(reason = 'manual') {
+  const now = Date.now()
+  if (reason === 'ticker' && now - lastOverlaySyncAt < 40) return
+  lastOverlaySyncAt = now
+
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const defaultDockWidth = Math.min(viewportWidth * 0.92, 780)
+  const dockWidth = dialogDockRef.value?.offsetWidth || defaultDockWidth
+  const dockHeight = dialogDockRef.value?.offsetHeight || 94
+
+  let centerX = viewportWidth / 2
+  let dockTop = Math.max(12, viewportHeight - dockHeight - 12)
+  if (currentModel) {
+    try {
+      const bounds = currentModel.getBounds()
+      centerX = bounds.x + bounds.width / 2
+      dockTop = bounds.y - dockHeight - 12
+    } catch {
+      // ignore unstable bounds during model loading
+    }
+  }
+
+  const minDockX = dockWidth / 2 + 8
+  const maxDockX = viewportWidth - dockWidth / 2 - 8
+  const clampedDockX = Math.max(minDockX, Math.min(maxDockX, centerX))
+  const clampedDockY = Math.max(8, Math.min(viewportHeight - dockHeight - 8, dockTop))
+  dialogDockPosition.value = {
+    x: Math.round(clampedDockX),
+    y: Math.round(clampedDockY),
+  }
+
+  const bubbleWidth = replyBubbleRef.value?.offsetWidth || Math.min(viewportWidth * 0.9, 560)
+  const bubbleHeight = replyBubbleRef.value?.offsetHeight || 56
+  const minBubbleX = bubbleWidth / 2 + 8
+  const maxBubbleX = viewportWidth - bubbleWidth / 2 - 8
+  const bubbleX = Math.max(minBubbleX, Math.min(maxBubbleX, clampedDockX))
+  const bubbleY = Math.max(8, clampedDockY - bubbleHeight - 8)
+  replyBubblePosition.value = {
+    x: Math.round(bubbleX),
+    y: Math.round(bubbleY),
+  }
 }
 
 async function sendChat() {
@@ -1261,6 +1338,7 @@ function toggleControlButtonsVisible(visible: boolean) {
   if (lastPointerX > 0 || lastPointerY > 0) {
     updateMousePassthrough(lastPointerX, lastPointerY, null)
   }
+  syncDialogAndReplyPosition('toggle-visible')
   queuePersistControls('toggle-visible')
 }
 
@@ -1281,6 +1359,7 @@ function handleResize() {
   if (lastPointerX > 0 || lastPointerY > 0) {
     updateMousePassthrough(lastPointerX, lastPointerY, null)
   }
+  syncDialogAndReplyPosition('resize')
 }
 
 function handleMouseMove(event: MouseEvent) {
@@ -1318,6 +1397,7 @@ function handleMouseMove(event: MouseEvent) {
     currentModel.y = nextY
     modelTransformCustomized = true
     clampModelWithinViewport()
+    syncDialogAndReplyPosition('model-drag')
   }
   updateMousePassthroughByPointer(event)
 }
@@ -1507,6 +1587,7 @@ onMounted(async () => {
   applyControls(configStore.config.live2dControls, 'initial-config')
   syncActionOptionsFromConfig()
   syncReplyFromLatestAssistant()
+  syncDialogAndReplyPosition('mounted')
   await ensureLive2DRuntime()
   if (configStore.config.live2dModelPath) {
     await loadModel(configStore.config.live2dModelPath)
@@ -1536,6 +1617,7 @@ onMounted(async () => {
       focusCurrentY += (focusTargetY - focusCurrentY) * lerp
       currentModel.focus(focusCurrentX, focusCurrentY)
     }
+    syncDialogAndReplyPosition('ticker')
   }
   pixiApp.ticker.add(idleTicker)
 
@@ -1547,7 +1629,9 @@ onMounted(async () => {
     void configStore.loadConfig().then(() => {
       applyBehavior(configStore.config.live2dBehavior, 'reload-on-model-change')
       syncActionOptionsFromConfig()
-      return loadModel(modelPath)
+      return loadModel(modelPath).then(() => {
+        syncDialogAndReplyPosition('model-switch')
+      })
     })
   })
   const offShowReply = window.electronAPI.live2d.onShowReply((text: string) => {
@@ -1633,9 +1717,6 @@ canvas {
 
 .reply-bubble {
   position: absolute;
-  bottom: 110px;
-  left: 50%;
-  transform: translateX(-50%);
   max-width: 90%;
   z-index: 100;
   animation: fadeIn 0.3s ease;
@@ -1658,9 +1739,6 @@ canvas {
 
 .dialog-dock {
   position: absolute;
-  left: 50%;
-  bottom: 12px;
-  transform: translateX(-50%);
   width: min(92vw, 780px);
   z-index: 930;
   display: flex;
