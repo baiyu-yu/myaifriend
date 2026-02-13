@@ -146,6 +146,14 @@ class Application {
     if (this.runtimeLogs.length > 500) {
       this.runtimeLogs = this.runtimeLogs.slice(0, 500)
     }
+    const line = `[runtime][${source}][${level}] ${entry.message}`
+    if (level === 'error') {
+      console.error(line)
+    } else if (level === 'warn') {
+      console.warn(line)
+    } else {
+      console.info(line)
+    }
     return entry
   }
 

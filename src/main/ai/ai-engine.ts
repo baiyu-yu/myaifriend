@@ -1010,8 +1010,9 @@ export class AIEngine {
     const raw = String(baseUrl || '').trim()
     if (!raw) return '/chat/completions'
     const trimmed = raw.replace(/\/+$/, '')
-    if (/\/chat\/completions$/i.test(trimmed)) return trimmed
-    return `${trimmed}/chat/completions`
+    const deduped = trimmed.replace(/(\/chat\/completions)+$/i, '/chat/completions')
+    if (/\/chat\/completions$/i.test(deduped)) return deduped
+    return `${deduped}/chat/completions`
   }
 
   private buildRequestBody(
@@ -1063,9 +1064,12 @@ export class AIEngine {
     this.abortControllers.add(controller)
     const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const url = this.resolveChatCompletionUrl(apiConfig.baseUrl)
+    const baseUrl = String(apiConfig.baseUrl || '').trim()
     const safeRequestLog = {
       request_id: requestId,
+      base_url: baseUrl,
       url,
+      url_normalized: baseUrl !== url,
       model: requestBody.model,
       has_tools: Array.isArray(requestBody.tools) && requestBody.tools.length > 0,
       tool_choice: (requestBody as Record<string, unknown>).tool_choice || '',
@@ -1115,6 +1119,7 @@ export class AIEngine {
         throw new Error(`API response is not valid JSON: ${rawText}`)
       }
       const casted = parsed as ChatCompletionResponse
+      const choices = Array.isArray(casted?.choices) ? casted.choices : []
       if (!Array.isArray(casted?.choices)) {
         this.logWorkflow(
           'model_response_unexpected',
@@ -1126,6 +1131,51 @@ export class AIEngine {
           },
           'warn'
         )
+      } else if (choices.length === 0) {
+        this.logWorkflow(
+          'model_response_empty_choices',
+          {
+            request_id: requestId,
+            model: String(requestBody.model || ''),
+            response_preview: truncate(rawText, 1000),
+          },
+          'warn'
+        )
+      } else {
+        const firstChoice = choices[0]
+        const finishReason = firstChoice?.finish_reason ?? ''
+        const assistantContent = firstChoice?.message?.content
+        const contentLength = typeof assistantContent === 'string' ? assistantContent.length : 0
+        const toolCallCount = Array.isArray(firstChoice?.message?.tool_calls)
+          ? firstChoice.message.tool_calls.length
+          : 0
+        const requiresTool = String((requestBody as Record<string, unknown>).tool_choice || '') === 'required'
+        if (!finishReason) {
+          this.logWorkflow(
+            'model_response_missing_finish_reason',
+            {
+              request_id: requestId,
+              model: String(requestBody.model || ''),
+              tool_calls: toolCallCount,
+              content_length: contentLength,
+              response_preview: truncate(rawText, 1000),
+            },
+            'warn'
+          )
+        }
+        if (requiresTool && toolCallCount === 0) {
+          this.logWorkflow(
+            'model_response_required_tool_missing',
+            {
+              request_id: requestId,
+              model: String(requestBody.model || ''),
+              finish_reason: finishReason,
+              content_length: contentLength,
+              response_preview: truncate(rawText, 1000),
+            },
+            'warn'
+          )
+        }
       }
       return casted
     } finally {

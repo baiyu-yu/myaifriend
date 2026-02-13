@@ -109,6 +109,11 @@ export class FileWriteTool implements ITool {
     return { watchFolder: null, relativePath: rawPath }
   }
 
+  private normalizeRelativePathForSelectedFolder(rawPath: string, watchFolder: string): string {
+    const inferred = this.inferWatchFolderFromRelativePath(rawPath, [watchFolder])
+    return inferred.watchFolder ? inferred.relativePath : rawPath
+  }
+
   private resolveTargetPath(args: Record<string, unknown>): ResolveTargetPathResult {
     const rawPath = String(args.path || '').trim()
     if (!rawPath) {
@@ -167,15 +172,15 @@ export class FileWriteTool implements ITool {
     }
 
     if (!baseFolder) {
-      if (watchFolders.length === 1) {
+      const inferred = this.inferWatchFolderFromRelativePath(rawPath, watchFolders)
+      if (inferred.watchFolder) {
+        baseFolder = inferred.watchFolder
+        effectivePath = inferred.relativePath
+      } else if (watchFolders.length === 1) {
         baseFolder = watchFolders[0]
-      } else {
-        const inferred = this.inferWatchFolderFromRelativePath(rawPath, watchFolders)
-        if (inferred.watchFolder) {
-          baseFolder = inferred.watchFolder
-          effectivePath = inferred.relativePath
-        }
       }
+    } else {
+      effectivePath = this.normalizeRelativePathForSelectedFolder(rawPath, baseFolder)
     }
 
     if (!baseFolder) {

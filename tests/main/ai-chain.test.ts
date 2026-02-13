@@ -79,13 +79,13 @@ test('ai engine uses premier model for dispatch', async () => {
   }
 })
 
-test('ai engine does not append /chat/completions twice when baseUrl already points to it', async () => {
+test('ai engine normalizes duplicated /chat/completions suffix in baseUrl', async () => {
   const config = buildConfig({
     apiConfigs: [
       {
         id: 'api-1',
         name: 'local',
-        baseUrl: 'http://fake/chat/completions',
+        baseUrl: 'http://fake/chat/completions/chat/completions/',
         apiKey: 'k',
         defaultModel: 'gpt-a',
         availableModels: [],

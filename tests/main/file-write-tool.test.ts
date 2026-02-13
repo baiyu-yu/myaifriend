@@ -72,3 +72,25 @@ test('file_write treats root-relative path as watch-folder-relative path on Wind
   await fs.rm(root, { recursive: true, force: true })
 })
 
+test('file_write strips duplicated watch-folder prefix in relative path when single watch folder is configured', async () => {
+  const { root, folderA } = await createWatchFolders()
+  const tool = new FileWriteTool(() => ({ watchFolders: [folderA] } as any))
+
+  const watchFolderName = path.basename(folderA)
+  const result = await tool.execute({ path: `${watchFolderName}/generated_view.html`, content: '<h1>ok</h1>' })
+  assert.equal(result.isError, undefined)
+
+  const expectedPath = path.join(folderA, 'generated_view.html')
+  const expectedContent = await fs.readFile(expectedPath, 'utf-8')
+  assert.equal(expectedContent, '<h1>ok</h1>')
+
+  const duplicatedPath = path.join(folderA, watchFolderName, 'generated_view.html')
+  const duplicatedExists = await fs
+    .stat(duplicatedPath)
+    .then(() => true)
+    .catch(() => false)
+  assert.equal(duplicatedExists, false)
+
+  await fs.rm(root, { recursive: true, force: true })
+})
+

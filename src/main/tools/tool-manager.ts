@@ -15,6 +15,18 @@ import { VisionAnalyzeTool } from './builtin/vision-analyze'
 import { MemoryManager } from '../ai/memory-manager'
 import { ConversationManager } from '../conversation-manager'
 
+function truncateLog(text: string, maxLen: number): string {
+  return text.length <= maxLen ? text : `${text.slice(0, maxLen)}...`
+}
+
+function safeStringify(value: unknown, maxLen = 1200): string {
+  try {
+    return truncateLog(JSON.stringify(value), maxLen)
+  } catch {
+    return truncateLog(String(value), maxLen)
+  }
+}
+
 export interface ITool {
   definition: ToolDefinition
   execute(args: Record<string, unknown>): Promise<ToolResult>
@@ -251,6 +263,10 @@ export class ToolManager {
   async execute(name: string, args: Record<string, unknown>): Promise<ToolResult> {
     const tool = this.tools.get(name)
     if (!tool) {
+      console.warn(
+        '[tool-manager][execute_failed]',
+        JSON.stringify({ tool: name, reason: 'not_found' }, null, 2)
+      )
       return {
         toolCallId: '',
         content: `Tool "${name}" not found`,
@@ -258,6 +274,10 @@ export class ToolManager {
       }
     }
     if (!this.isToolEnabled(name)) {
+      console.warn(
+        '[tool-manager][execute_failed]',
+        JSON.stringify({ tool: name, reason: 'disabled' }, null, 2)
+      )
       return {
         toolCallId: '',
         content: `Tool "${name}" is disabled by settings`,
@@ -265,9 +285,40 @@ export class ToolManager {
       }
     }
 
+    const startedAt = Date.now()
+    console.info(
+      '[tool-manager][execute_start]',
+      JSON.stringify({ tool: name, args_preview: safeStringify(args) }, null, 2)
+    )
     try {
-      return await tool.execute(args)
+      const result = await tool.execute(args)
+      console.info(
+        '[tool-manager][execute_done]',
+        JSON.stringify(
+          {
+            tool: name,
+            is_error: Boolean(result.isError),
+            duration_ms: Date.now() - startedAt,
+            result_preview: truncateLog(String(result.content || ''), 800),
+          },
+          null,
+          2
+        )
+      )
+      return result
     } catch (error) {
+      console.error(
+        '[tool-manager][execute_error]',
+        JSON.stringify(
+          {
+            tool: name,
+            duration_ms: Date.now() - startedAt,
+            message: error instanceof Error ? error.message : String(error),
+          },
+          null,
+          2
+        )
+      )
       return {
         toolCallId: '',
         content: `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`,
