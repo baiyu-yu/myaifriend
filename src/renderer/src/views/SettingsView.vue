@@ -40,12 +40,12 @@
 
         <el-divider content-position="left">模型请求体扩展（除 messages 字段）</el-divider>
         <el-form label-width="180px" style="max-width: 860px">
-          <el-form-item label="自定义请求体 JSON">
+          <el-form-item label="自定义请求体（键值对）">
             <el-input
               v-model="modelRequestBodyInput"
               type="textarea"
               :rows="8"
-              placeholder='例如：{"temperature":0.7,"top_p":0.9}'
+              placeholder="例如：temperature=0.7&#10;top_p=0.9&#10;response.format.type=json_schema"
             />
           </el-form-item>
           <el-form-item>
@@ -592,6 +592,7 @@ const modelAssignmentForm = reactive<Record<TaskType, { apiConfigId: string; mod
   memory_fragmentation: { apiConfigId: '', model: '' },
   vision: { apiConfigId: '', model: '' },
   code_generation: { apiConfigId: '', model: '' },
+  tool_calling: { apiConfigId: '', model: '' },
   premier: { apiConfigId: '', model: '' },
 })
 
@@ -957,7 +958,7 @@ let logRefreshTimer: ReturnType<typeof setInterval> | null = null
 const searchAllowDomainsInput = ref('')
 const searchBlockDomainsInput = ref('')
 const instinctMemoriesInput = ref('')
-const modelRequestBodyInput = ref('{}')
+const modelRequestBodyInput = ref('')
 
 const memoryGroups = computed<MemoryGroupRow[]>(() => {
   const groupMap = new Map<string, MemoryGroupRow>()
@@ -1008,6 +1009,106 @@ function parseDomainInput(value: string): string[] {
     .filter(Boolean)
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function parseScalarValue(raw: string): unknown {
+  const text = raw.trim()
+  if (!text) return ''
+  const lowered = text.toLowerCase()
+  if (lowered === 'true') return true
+  if (lowered === 'false') return false
+  if (lowered === 'null') return null
+  if (/^-?(0|[1-9]\d*)(\.\d+)?$/.test(text)) return Number(text)
+  if (
+    (text.startsWith('{') && text.endsWith('}')) ||
+    (text.startsWith('[') && text.endsWith(']')) ||
+    (text.startsWith('"') && text.endsWith('"'))
+  ) {
+    try {
+      return JSON.parse(text)
+    } catch {
+      // keep raw text if not valid JSON
+    }
+  }
+  if (text.startsWith("'") && text.endsWith("'") && text.length >= 2) {
+    return text.slice(1, -1)
+  }
+  return text
+}
+
+function setNestedValue(target: Record<string, unknown>, keyPath: string, value: unknown): void {
+  const segments = keyPath
+    .split('.')
+    .map((item) => item.trim())
+    .filter(Boolean)
+  if (!segments.length) throw new Error('键名不能为空')
+  if (segments[0] === 'messages') return
+
+  let cursor: Record<string, unknown> = target
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const segment = segments[i]
+    const current = cursor[segment]
+    if (!isPlainObject(current)) {
+      cursor[segment] = {}
+    }
+    cursor = cursor[segment] as Record<string, unknown>
+  }
+  cursor[segments[segments.length - 1]] = value
+}
+
+function parseModelRequestBodyKeyValueInput(raw: string): Record<string, unknown> {
+  const next: Record<string, unknown> = {}
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && !line.startsWith('//'))
+
+  for (const line of lines) {
+    const separatorIndex = line.indexOf('=')
+    if (separatorIndex <= 0) {
+      throw new Error(`无效行（需使用 key=value）：${line}`)
+    }
+    const key = line.slice(0, separatorIndex).trim()
+    const valueRaw = line.slice(separatorIndex + 1).trim()
+    if (!key) {
+      throw new Error(`无效键名：${line}`)
+    }
+    setNestedValue(next, key, parseScalarValue(valueRaw))
+  }
+
+  return next
+}
+
+function valueToEditableText(value: unknown): string {
+  if (typeof value === 'string') {
+    if (!value.trim()) return '""'
+    if (/[\s#=]/.test(value)) return JSON.stringify(value)
+    return value
+  }
+  if (value === null) return 'null'
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return JSON.stringify(value)
+}
+
+function flattenModelRequestBody(
+  source: Record<string, unknown>,
+  prefix = '',
+  output: string[] = []
+): string[] {
+  for (const [key, value] of Object.entries(source)) {
+    const path = prefix ? `${prefix}.${key}` : key
+    if (key === 'messages') continue
+    if (isPlainObject(value)) {
+      flattenModelRequestBody(value, path, output)
+      continue
+    }
+    output.push(`${path}=${valueToEditableText(value)}`)
+  }
+  return output
+}
+
 function syncSearchConfigInputs() {
   searchAllowDomainsInput.value = (configStore.config.webSearch.allowDomains || []).join('\n')
   searchBlockDomainsInput.value = (configStore.config.webSearch.blockDomains || []).join('\n')
@@ -1019,7 +1120,12 @@ function syncMemoryLayerInputs() {
 
 function syncModelRequestBodyInput() {
   const source = configStore.config.modelRequestBody
-  modelRequestBodyInput.value = JSON.stringify(source && typeof source === 'object' ? source : {}, null, 2)
+  if (!isPlainObject(source)) {
+    modelRequestBodyInput.value = ''
+    return
+  }
+  const lines = flattenModelRequestBody(source)
+  modelRequestBodyInput.value = lines.join('\n')
 }
 
 async function saveWebSearchConfig() {
@@ -1034,18 +1140,27 @@ async function saveModelRequestBody() {
   const raw = modelRequestBodyInput.value.trim()
   let parsed: unknown = {}
   if (raw) {
-    try {
-      parsed = JSON.parse(raw)
-    } catch (error) {
-      ElMessage.error(`请求体 JSON 解析失败：${error instanceof Error ? error.message : String(error)}`)
-      return
+    if (raw.startsWith('{')) {
+      try {
+        parsed = JSON.parse(raw)
+      } catch (error) {
+        ElMessage.error(`请求体 JSON 解析失败：${error instanceof Error ? error.message : String(error)}`)
+        return
+      }
+    } else {
+      try {
+        parsed = parseModelRequestBodyKeyValueInput(raw)
+      } catch (error) {
+        ElMessage.error(`请求体键值对解析失败：${error instanceof Error ? error.message : String(error)}`)
+        return
+      }
     }
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    ElMessage.warning('请求体扩展必须是 JSON 对象')
+  if (!isPlainObject(parsed)) {
+    ElMessage.warning('请求体扩展必须是对象')
     return
   }
-  const next = { ...(parsed as Record<string, unknown>) }
+  const next = { ...parsed }
   if (Object.prototype.hasOwnProperty.call(next, 'messages')) {
     delete next.messages
   }
@@ -1055,7 +1170,7 @@ async function saveModelRequestBody() {
 }
 
 async function resetModelRequestBody() {
-  modelRequestBodyInput.value = '{}'
+  modelRequestBodyInput.value = ''
   await configStore.setConfig('modelRequestBody', {})
   ElMessage.success('模型请求体扩展已重置')
 }

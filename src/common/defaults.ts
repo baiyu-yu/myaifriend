@@ -8,6 +8,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     memory_fragmentation: { apiConfigId: '', model: '' },
     vision: { apiConfigId: '', model: '' },
     code_generation: { apiConfigId: '', model: '' },
+    tool_calling: { apiConfigId: '', model: '' },
     premier: { apiConfigId: '', model: '' },
   },
   characters: [

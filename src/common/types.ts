@@ -16,6 +16,7 @@ export type TaskType =
   | 'memory_fragmentation'
   | 'vision'
   | 'code_generation'
+  | 'tool_calling'
   | 'premier'
 
 export interface ModelRouteRule {
@@ -32,6 +33,7 @@ export const TASK_TYPE_LABELS: Record<TaskType, string> = {
   memory_fragmentation: '记忆及知识库碎片化',
   vision: '图像识别',
   code_generation: '代码编写',
+  tool_calling: '工具调用',
   premier: '总理模型',
 }
 
