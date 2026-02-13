@@ -7,6 +7,19 @@ export const useConfigStore = defineStore('config', () => {
   const config = ref<AppConfig>({ ...DEFAULT_CONFIG })
   const loading = ref(false)
 
+  function toIPCCloneable<T>(value: T): T {
+    try {
+      return structuredClone(value)
+    } catch {
+      return JSON.parse(
+        JSON.stringify(value, (_key, item) => {
+          if (typeof item === 'function' || typeof item === 'symbol') return undefined
+          return item
+        })
+      ) as T
+    }
+  }
+
   function getElectronAPI() {
     const api = window.electronAPI
     if (!api?.config) {
@@ -30,8 +43,9 @@ export const useConfigStore = defineStore('config', () => {
 
   /** 保存单个配置项 */
   async function setConfig<K extends keyof AppConfig>(key: K, value: AppConfig[K]) {
-    config.value[key] = value
-    return getElectronAPI().config.set(key, value)
+    const safeValue = toIPCCloneable(value)
+    config.value[key] = safeValue
+    return getElectronAPI().config.set(key, safeValue)
   }
 
   // --- API Configs ---
