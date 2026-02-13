@@ -40,13 +40,26 @@
 
         <el-divider content-position="left">模型请求体扩展（除 messages 字段）</el-divider>
         <el-form label-width="180px" style="max-width: 860px">
-          <el-form-item label="自定义请求体（键值对）">
-            <el-input
-              v-model="modelRequestBodyInput"
-              type="textarea"
-              :rows="8"
-              placeholder="例如：temperature=0.7&#10;top_p=0.9&#10;response.format.type=json_schema"
-            />
+          <el-form-item label="自定义请求体（键值）">
+            <div class="request-body-editor">
+              <div v-for="(row, index) in modelRequestBodyRows" :key="`body-row-${index}`" class="request-body-row">
+                <el-input
+                  v-model="row.key"
+                  placeholder="键名，支持点路径，例如 response.format.type"
+                  class="request-body-key"
+                />
+                <el-input
+                  v-model="row.value"
+                  placeholder='值，例如 0.7 / true / {"a":1}'
+                  class="request-body-value"
+                />
+                <el-button type="danger" plain @click="removeModelRequestBodyRow(index)">删除</el-button>
+              </div>
+              <div class="request-body-actions">
+                <el-button @click="addModelRequestBodyRow">新增参数</el-button>
+                <el-text type="info">支持 number/boolean/null/JSON 值；键名支持点路径嵌套。</el-text>
+              </div>
+            </div>
           </el-form-item>
           <el-form-item>
             <el-button type="primary" @click="saveModelRequestBody">保存请求体扩展</el-button>
@@ -567,6 +580,7 @@ type WatchFolderContentRow = {
   loading: boolean
   error: string
 }
+type RequestBodyRow = { key: string; value: string }
 
 const configStore = useConfigStore()
 const router = useRouter()
@@ -958,7 +972,7 @@ let logRefreshTimer: ReturnType<typeof setInterval> | null = null
 const searchAllowDomainsInput = ref('')
 const searchBlockDomainsInput = ref('')
 const instinctMemoriesInput = ref('')
-const modelRequestBodyInput = ref('')
+const modelRequestBodyRows = ref<RequestBodyRow[]>([{ key: '', value: '' }])
 
 const memoryGroups = computed<MemoryGroupRow[]>(() => {
   const groupMap = new Map<string, MemoryGroupRow>()
@@ -1058,29 +1072,6 @@ function setNestedValue(target: Record<string, unknown>, keyPath: string, value:
   cursor[segments[segments.length - 1]] = value
 }
 
-function parseModelRequestBodyKeyValueInput(raw: string): Record<string, unknown> {
-  const next: Record<string, unknown> = {}
-  const lines = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#') && !line.startsWith('//'))
-
-  for (const line of lines) {
-    const separatorIndex = line.indexOf('=')
-    if (separatorIndex <= 0) {
-      throw new Error(`无效行（需使用 key=value）：${line}`)
-    }
-    const key = line.slice(0, separatorIndex).trim()
-    const valueRaw = line.slice(separatorIndex + 1).trim()
-    if (!key) {
-      throw new Error(`无效键名：${line}`)
-    }
-    setNestedValue(next, key, parseScalarValue(valueRaw))
-  }
-
-  return next
-}
-
 function valueToEditableText(value: unknown): string {
   if (typeof value === 'string') {
     if (!value.trim()) return '""'
@@ -1092,11 +1083,7 @@ function valueToEditableText(value: unknown): string {
   return JSON.stringify(value)
 }
 
-function flattenModelRequestBody(
-  source: Record<string, unknown>,
-  prefix = '',
-  output: string[] = []
-): string[] {
+function flattenModelRequestBody(source: Record<string, unknown>, prefix = '', output: RequestBodyRow[] = []): RequestBodyRow[] {
   for (const [key, value] of Object.entries(source)) {
     const path = prefix ? `${prefix}.${key}` : key
     if (key === 'messages') continue
@@ -1104,7 +1091,7 @@ function flattenModelRequestBody(
       flattenModelRequestBody(value, path, output)
       continue
     }
-    output.push(`${path}=${valueToEditableText(value)}`)
+    output.push({ key: path, value: valueToEditableText(value) })
   }
   return output
 }
@@ -1118,14 +1105,29 @@ function syncMemoryLayerInputs() {
   instinctMemoriesInput.value = (configStore.config.memoryLayers.instinctMemories || []).join('\n')
 }
 
-function syncModelRequestBodyInput() {
+function ensureModelRequestBodyRows() {
+  if (modelRequestBodyRows.value.length === 0) {
+    modelRequestBodyRows.value.push({ key: '', value: '' })
+  }
+}
+
+function addModelRequestBodyRow() {
+  modelRequestBodyRows.value.push({ key: '', value: '' })
+}
+
+function removeModelRequestBodyRow(index: number) {
+  modelRequestBodyRows.value.splice(index, 1)
+  ensureModelRequestBodyRows()
+}
+
+function syncModelRequestBodyRows() {
   const source = configStore.config.modelRequestBody
   if (!isPlainObject(source)) {
-    modelRequestBodyInput.value = ''
+    modelRequestBodyRows.value = [{ key: '', value: '' }]
     return
   }
-  const lines = flattenModelRequestBody(source)
-  modelRequestBodyInput.value = lines.join('\n')
+  const rows = flattenModelRequestBody(source)
+  modelRequestBodyRows.value = rows.length > 0 ? rows : [{ key: '', value: '' }]
 }
 
 async function saveWebSearchConfig() {
@@ -1137,40 +1139,33 @@ async function saveWebSearchConfig() {
 }
 
 async function saveModelRequestBody() {
-  const raw = modelRequestBodyInput.value.trim()
-  let parsed: unknown = {}
-  if (raw) {
-    if (raw.startsWith('{')) {
-      try {
-        parsed = JSON.parse(raw)
-      } catch (error) {
-        ElMessage.error(`请求体 JSON 解析失败：${error instanceof Error ? error.message : String(error)}`)
-        return
-      }
-    } else {
-      try {
-        parsed = parseModelRequestBodyKeyValueInput(raw)
-      } catch (error) {
-        ElMessage.error(`请求体键值对解析失败：${error instanceof Error ? error.message : String(error)}`)
-        return
-      }
+  const next: Record<string, unknown> = {}
+  for (const row of modelRequestBodyRows.value) {
+    const key = String(row.key || '').trim()
+    const value = String(row.value || '').trim()
+    if (!key && !value) continue
+    if (!key) {
+      ElMessage.error('存在未填写键名的请求体参数')
+      return
+    }
+    try {
+      setNestedValue(next, key, parseScalarValue(value))
+    } catch (error) {
+      ElMessage.error(`请求体键值对解析失败：${error instanceof Error ? error.message : String(error)}`)
+      return
     }
   }
-  if (!isPlainObject(parsed)) {
-    ElMessage.warning('请求体扩展必须是对象')
-    return
-  }
-  const next = { ...parsed }
+
   if (Object.prototype.hasOwnProperty.call(next, 'messages')) {
     delete next.messages
   }
   await configStore.setConfig('modelRequestBody', next)
-  syncModelRequestBodyInput()
+  syncModelRequestBodyRows()
   ElMessage.success('模型请求体扩展已保存')
 }
 
 async function resetModelRequestBody() {
-  modelRequestBodyInput.value = ''
+  modelRequestBodyRows.value = [{ key: '', value: '' }]
   await configStore.setConfig('modelRequestBody', {})
   ElMessage.success('模型请求体扩展已重置')
 }
@@ -1326,7 +1321,7 @@ onMounted(async () => {
   syncModelAssignmentsFromConfig()
   syncSearchConfigInputs()
   syncMemoryLayerInputs()
-  syncModelRequestBodyInput()
+  syncModelRequestBodyRows()
   await loadTools()
   await loadMemories()
   await loadStorageInfo()
@@ -1376,7 +1371,7 @@ watch(
   () => configStore.config.modelRequestBody,
   () => {
     if (activeTab.value === 'api') {
-      syncModelRequestBodyInput()
+      syncModelRequestBodyRows()
     }
   },
   { deep: true }
@@ -1580,6 +1575,28 @@ onBeforeUnmount(() => {
   background: linear-gradient(180deg, rgba(249, 252, 252, 0.92), rgba(242, 247, 248, 0.9));
 }
 
+.request-body-editor {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.request-body-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.request-body-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .live2d-model-row {
   display: flex;
   gap: 10px;
@@ -1746,6 +1763,10 @@ onBeforeUnmount(() => {
 
   :deep(.el-form-item) {
     margin-bottom: 14px;
+  }
+
+  .request-body-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>
